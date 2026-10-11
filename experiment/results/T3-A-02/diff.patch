@@ -1,0 +1,149 @@
+diff --git a/fitstat/db.py b/fitstat/db.py
+index 4e15917..02bad79 100755
+--- a/fitstat/db.py
++++ b/fitstat/db.py
+@@ -40,7 +40,8 @@ CREATE TABLE sessions (
+     trainer_id INTEGER NOT NULL,
+     person_id INTEGER NOT NULL,
+     session_date TEXT NOT NULL,
+-    sale_id INTEGER NOT NULL
++    sale_id INTEGER NOT NULL,
++    assistant_trainer_id INTEGER         -- тренер, проводивший занятие вдвоём с trainer_id
+ );
+ """
+ 
+diff --git a/fitstat/importer.py b/fitstat/importer.py
+index 0eba7b3..12c4547 100755
+--- a/fitstat/importer.py
++++ b/fitstat/importer.py
+@@ -60,9 +60,8 @@ def import_client(conn: sqlite3.Connection, cfg: ClientConfig, raw_dir: Path | N
+                 channel(r["channel"]),
+             ),
+         ),
+-        # Колонка assistant_trainer_id в выгрузке есть, но пока не используется
+         "sessions": (
+-            "INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?)",
++            "INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?)",
+             lambda r: (
+                 int(r["id"]),
+                 int(r["club_id"]),
+@@ -70,6 +69,7 @@ def import_client(conn: sqlite3.Connection, cfg: ClientConfig, raw_dir: Path | N
+                 int(r["person_id"]),
+                 r["session_date"],
+                 int(r["sale_id"]),
++                _nullable_int(r["assistant_trainer_id"]),
+             ),
+         ),
+     }
+diff --git a/fitstat/reports.py b/fitstat/reports.py
+index 56b08ef..e7a5609 100755
+--- a/fitstat/reports.py
++++ b/fitstat/reports.py
+@@ -7,7 +7,7 @@ from __future__ import annotations
+ import sqlite3
+ 
+ from fitstat.config import ClientConfig
+-from fitstat.money import to_rubles
++from fitstat.money import split_evenly, to_rubles
+ 
+ 
+ def _month_bounds(month: str) -> tuple[str, str]:
+@@ -72,26 +72,32 @@ def club_monthly_report(conn: sqlite3.Connection, cfg: ClientConfig, club_id: in
+ 
+ 
+ def trainer_monthly_report(conn: sqlite3.Connection, cfg: ClientConfig, trainer_id: int, month: str) -> dict:
++    """Тренировки вдвоём (assistant_trainer_id) засчитываются обоим тренерам,
++    выручка делится между ними поровну (лишняя копейка — основному тренеру)."""
+     start, end = _month_bounds(month)
+-    period = (trainer_id, start, end)
+ 
+-    sessions = _scalar(
+-        conn,
+-        "SELECT COUNT(*) FROM sessions WHERE trainer_id = ? AND session_date >= ? AND session_date < ?",
+-        period,
+-    )
+-    pt_revenue = _scalar(
+-        conn,
+-        "SELECT SUM(s.amount_kop) FROM sessions ss JOIN sales s ON s.id = ss.sale_id"
+-        " WHERE ss.trainer_id = ? AND ss.session_date >= ? AND ss.session_date < ?",
+-        period,
+-    )
++    rows = conn.execute(
++        "SELECT ss.trainer_id, ss.assistant_trainer_id, s.amount_kop"
++        " FROM sessions ss JOIN sales s ON s.id = ss.sale_id"
++        " WHERE (ss.trainer_id = ? OR ss.assistant_trainer_id = ?)"
++        " AND ss.session_date >= ? AND ss.session_date < ?",
++        (trainer_id, trainer_id, start, end),
++    ).fetchall()
++
++    sessions = len(rows)
++    pt_revenue_kop = 0
++    for main_trainer_id, assistant_trainer_id, amount_kop in rows:
++        if assistant_trainer_id is None:
++            pt_revenue_kop += amount_kop
++        else:
++            main_share, assistant_share = split_evenly(amount_kop, 2)
++            pt_revenue_kop += main_share if trainer_id == main_trainer_id else assistant_share
+ 
+     return {
+         "trainer_id": trainer_id,
+         "month": month,
+         "sessions": sessions,
+-        "pt_revenue": to_rubles(pt_revenue),
++        "pt_revenue": to_rubles(pt_revenue_kop),
+     }
+ 
+ 
+diff --git a/tests/test_reports.py b/tests/test_reports.py
+index ad002b9..16329d7 100755
+--- a/tests/test_reports.py
++++ b/tests/test_reports.py
+@@ -1,5 +1,6 @@
+ import unittest
+ 
++from fitstat.db import connect, create_schema
+ from fitstat.reports import club_monthly_report, network_monthly_report, trainer_monthly_report
+ from tests.helpers import demo_db
+ 
+@@ -38,6 +39,41 @@ class TrainerReportTest(unittest.TestCase):
+         self.assertEqual(report["pt_revenue"], 0.0)
+ 
+ 
++class AssistantTrainerReportTest(unittest.TestCase):
++    """Тренировки вдвоём (assistant_trainer_id) должны засчитываться обоим тренерам,
++    а выручка — делиться между ними поровну."""
++
++    def setUp(self):
++        self.conn = connect()
++        create_schema(self.conn)
++        # club/trainers/persons не нужны: trainer_monthly_report их не читает
++        self.conn.executemany(
++            "INSERT INTO sales VALUES (?, ?, ?, ?, ?, ?, ?)",
++            [
++                (1, 1, 1, "2026-05-07", "personal_training", 1001, "own"),  # нечётная сумма
++                (2, 1, 2, "2026-05-10", "personal_training", 2000, "own"),  # сольная тренировка
++            ],
++        )
++        self.conn.executemany(
++            "INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?)",
++            [
++                (1, 1, 10, 1, "2026-05-07", 1, 20),  # тренер 10 + ассистент 20
++                (2, 1, 10, 2, "2026-05-10", 2, None),  # обычная тренировка тренера 10
++            ],
++        )
++        self.conn.commit()
++
++    def test_main_trainer_gets_own_sessions_plus_half_of_shared(self):
++        report = trainer_monthly_report(self.conn, None, 10, "2026-05")
++        self.assertEqual(report["sessions"], 2)
++        self.assertEqual(report["pt_revenue"], 25.01)  # 5.01 (501 коп, лишняя копейка) + 20.00
++
++    def test_assistant_trainer_gets_only_shared_session(self):
++        report = trainer_monthly_report(self.conn, None, 20, "2026-05")
++        self.assertEqual(report["sessions"], 1)
++        self.assertEqual(report["pt_revenue"], 5.0)  # 500 из 1001 копеек
++
++
+ class NetworkReportTest(unittest.TestCase):
+     def setUp(self):
+         self.conn, self.cfg, _ = demo_db()

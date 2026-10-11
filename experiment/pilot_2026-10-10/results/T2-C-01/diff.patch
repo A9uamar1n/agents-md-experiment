@@ -1,0 +1,143 @@
+diff --git a/fitstat/reports.py b/fitstat/reports.py
+index 56b08ef..5756a38 100755
+--- a/fitstat/reports.py
++++ b/fitstat/reports.py
+@@ -21,6 +21,50 @@ def _scalar(conn: sqlite3.Connection, sql: str, params: tuple) -> int:
+     return conn.execute(sql, params).fetchone()[0] or 0
+ 
+ 
++# Гостевые визиты считаются пробными только начиная с этой даты (docs/metrics.md).
++_GUEST_PASS_TRIAL_SINCE = "2025-01-01"
++
++
++def _trial_conversion(conn: sqlite3.Connection, club_id: int, start: str, end: str) -> float | None:
++    """Доля когорты месяца [start, end), купившей абонемент в день первого пробного
++    визита в клубе или в следующие 14 календарных дней. None, если когорта пустая."""
++    sql = """
++        WITH eligible AS (
++            SELECT person_id, visit_date
++            FROM visits
++            WHERE club_id = ?
++              AND (visit_type = 'trial' OR (visit_type = 'guest_pass' AND visit_date >= ?))
++        ),
++        first_trial AS (
++            SELECT person_id, MIN(visit_date) AS trial_date
++            FROM eligible
++            GROUP BY person_id
++        ),
++        cohort AS (
++            SELECT person_id, trial_date
++            FROM first_trial
++            WHERE trial_date >= ? AND trial_date < ?
++        )
++        SELECT
++            COUNT(*),
++            SUM(CASE WHEN EXISTS (
++                SELECT 1 FROM sales s
++                WHERE s.club_id = ?
++                  AND s.person_id = cohort.person_id
++                  AND s.kind = 'membership'
++                  AND s.sale_date >= cohort.trial_date
++                  AND s.sale_date <= date(cohort.trial_date, '+14 days')
++            ) THEN 1 ELSE 0 END)
++        FROM cohort
++    """
++    cohort_size, converted = conn.execute(
++        sql, (club_id, _GUEST_PASS_TRIAL_SINCE, start, end, club_id)
++    ).fetchone()
++    if not cohort_size:
++        return None
++    return round(converted / cohort_size, 3)
++
++
+ def club_monthly_report(conn: sqlite3.Connection, cfg: ClientConfig, club_id: int, month: str) -> dict:
+     start, end = _month_bounds(month)
+     period = (club_id, start, end)
+@@ -58,6 +102,7 @@ def club_monthly_report(conn: sqlite3.Connection, cfg: ClientConfig, club_id: in
+         " WHERE club_id = ? AND sale_date >= ? AND sale_date < ? AND kind = 'personal_training'",
+         period,
+     )
++    trial_conversion = _trial_conversion(conn, club_id, start, end)
+ 
+     return {
+         "club_id": club_id,
+@@ -68,6 +113,7 @@ def club_monthly_report(conn: sqlite3.Connection, cfg: ClientConfig, club_id: in
+         "active_members": active_members,
+         "pt_sessions": pt_sessions,
+         "pt_revenue": to_rubles(pt_revenue),
++        "trial_conversion": trial_conversion,
+     }
+ 
+ 
+diff --git a/tests/test_reports.py b/tests/test_reports.py
+index ad002b9..4c8be97 100755
+--- a/tests/test_reports.py
++++ b/tests/test_reports.py
+@@ -1,5 +1,7 @@
+ import unittest
+ 
++from fitstat.config import ClientConfig
++from fitstat.db import connect, create_schema
+ from fitstat.reports import club_monthly_report, network_monthly_report, trainer_monthly_report
+ from tests.helpers import demo_db
+ 
+@@ -16,12 +18,59 @@ class ClubReportTest(unittest.TestCase):
+         self.assertEqual(report["active_members"], 2)
+         self.assertEqual(report["pt_sessions"], 1)
+         self.assertEqual(report["pt_revenue"], 2000.0)
++        self.assertEqual(report["trial_conversion"], 1.0)
+ 
+     def test_empty_month(self):
+         report = club_monthly_report(self.conn, self.cfg, 2, "2026-03")
+         self.assertEqual(report["revenue"], 0.0)
+         self.assertEqual(report["visits"], 0)
+ 
++    def test_trial_conversion_empty_cohort(self):
++        report = club_monthly_report(self.conn, self.cfg, 2, "2026-05")
++        self.assertIsNone(report["trial_conversion"])
++
++
++class TrialConversionTest(unittest.TestCase):
++    """Когорта и окно конверсии собираются по всей истории, не только по месяцу отчёта."""
++
++    def setUp(self):
++        self.conn = connect()
++        create_schema(self.conn)
++        self.cfg = ClientConfig(slug="t", name="T", partner_channels=[])
++        self.conn.executemany(
++            "INSERT INTO clubs VALUES (?, ?, ?)",
++            [(1, "Club A", "2020-01-01"), (2, "Club B", "2020-01-01")],
++        )
++        self.conn.executemany(
++            "INSERT INTO persons VALUES (?, ?, ?)",
++            [(i, 1, "2020-01-01") for i in range(1, 7)],
++        )
++        self.conn.executemany(
++            "INSERT INTO visits VALUES (?, ?, ?, ?, ?)",
++            [
++                (1, 1, 1, "2026-06-01", "trial"),       # конвертируется в день визита
++                (2, 2, 1, "2026-06-05", "trial"),       # не покупает
++                (3, 3, 1, "2024-12-20", "guest_pass"),  # до 2025 — не пробный, игнорируем
++                (4, 3, 1, "2026-06-10", "guest_pass"),  # первый засчитываемый пробный
++                (5, 4, 1, "2026-06-02", "trial"),       # купит абонемент, но в другом клубе
++                (6, 5, 1, "2026-05-30", "trial"),       # когорта мая, не июня
++                (7, 6, 2, "2026-06-03", "trial"),       # пробный в другом клубе
++            ],
++        )
++        self.conn.executemany(
++            "INSERT INTO sales VALUES (?, ?, ?, ?, ?, ?, ?)",
++            [
++                (1, 1, 1, "2026-06-01", "membership", 300000, "own"),
++                (2, 1, 3, "2026-06-24", "membership", 300000, "own"),  # ровно +14 дней
++                (3, 2, 4, "2026-06-03", "membership", 300000, "own"),  # в другом клубе
++            ],
++        )
++        self.conn.commit()
++
++    def test_partial_conversion_with_club_scope_and_window(self):
++        report = club_monthly_report(self.conn, self.cfg, 1, "2026-06")
++        self.assertEqual(report["trial_conversion"], 0.5)
++
+ 
+ class TrainerReportTest(unittest.TestCase):
+     def setUp(self):

@@ -1,0 +1,102 @@
+diff --git a/clients/alpha.toml b/clients/alpha.toml
+index 2bd84f9..1e44070 100755
+--- a/clients/alpha.toml
++++ b/clients/alpha.toml
+@@ -7,3 +7,8 @@ partner_channels = ["sportpass", "fitmost"]
+ [clubs.3]
+ # Клуб закрыт, в итоги сети не включаем
+ closed_since = "2026-04-01"
++
++# Бар клуба 7 с мая 2026 в аренде у стороннего оператора, его продажи больше не выручка клуба
++[[clubs.7.revenue_exclude]]
++kind = "bar"
++from = "2026-05-01"
+diff --git a/docs/metrics.md b/docs/metrics.md
+index fa00a33..e02a4fa 100755
+--- a/docs/metrics.md
++++ b/docs/metrics.md
+@@ -9,6 +9,8 @@
+ ## Выручка — `revenue`
+ Сумма всех продаж клуба за месяц: абонементы, персональные тренировки, бар. Все каналы продаж.
+ 
++Для отдельного клуба в конфиге клиента (`clients/<client>.toml`) можно настроить исключение вида продаж из `revenue` начиная с какой-то даты (например, если бар клуба сдан в аренду стороннему оператору и его продажи больше не выручка клуба). Дата исключения всегда совпадает с началом месяца: с отчёта за этот месяц и далее продажи исключённого вида не входят в `revenue` клуба, отчёты за более ранние месяцы не меняются. Какие клубы и с какой даты — только в конфиге конкретного клиента.
++
+ ## Собственная выручка — `revenue_own`
+ То же, что `revenue`, но только продажи через собственный канал клуба, без партнёров-агрегаторов.
+ 
+diff --git a/fitstat/reports.py b/fitstat/reports.py
+index 56b08ef..0a95d2c 100755
+--- a/fitstat/reports.py
++++ b/fitstat/reports.py
+@@ -25,11 +25,12 @@ def club_monthly_report(conn: sqlite3.Connection, cfg: ClientConfig, club_id: in
+     start, end = _month_bounds(month)
+     period = (club_id, start, end)
+ 
+-    revenue = _scalar(
+-        conn,
+-        "SELECT SUM(amount_kop) FROM sales WHERE club_id = ? AND sale_date >= ? AND sale_date < ?",
+-        period,
+-    )
++    revenue_sql = "SELECT SUM(amount_kop) FROM sales WHERE club_id = ? AND sale_date >= ? AND sale_date < ?"
++    revenue_params = list(period)
++    for exclusion in cfg.club(club_id).get("revenue_exclude", []):
++        revenue_sql += " AND NOT (kind = ? AND sale_date >= ?)"
++        revenue_params += [exclusion["kind"], exclusion["from"]]
++    revenue = _scalar(conn, revenue_sql, tuple(revenue_params))
+     revenue_own = _scalar(
+         conn,
+         "SELECT SUM(amount_kop) FROM sales"
+diff --git a/tests/test_reports.py b/tests/test_reports.py
+index ad002b9..5628971 100755
+--- a/tests/test_reports.py
++++ b/tests/test_reports.py
+@@ -1,5 +1,7 @@
+ import unittest
+ 
++from fitstat.config import ClientConfig
++from fitstat.db import connect, create_schema
+ from fitstat.reports import club_monthly_report, network_monthly_report, trainer_monthly_report
+ from tests.helpers import demo_db
+ 
+@@ -23,6 +25,41 @@ class ClubReportTest(unittest.TestCase):
+         self.assertEqual(report["visits"], 0)
+ 
+ 
++class RevenueExcludeTest(unittest.TestCase):
++    """Клубный конфиг может исключать вид продаж из revenue с какой-то даты (см. docs/metrics.md)."""
++
++    def setUp(self):
++        self.conn = connect()
++        create_schema(self.conn)
++        self.conn.executemany(
++            "INSERT INTO clubs VALUES (?, ?, ?)",
++            [(1, "Клуб", "2020-01-01")],
++        )
++        self.conn.executemany(
++            "INSERT INTO sales VALUES (?, ?, ?, ?, ?, ?, ?)",
++            [
++                (1, 1, None, "2026-04-20", "bar", 10000, "own"),
++                (2, 1, None, "2026-05-10", "bar", 20000, "own"),
++                (3, 1, 1, "2026-05-11", "membership", 50000, "own"),
++            ],
++        )
++        self.conn.commit()
++        self.cfg = ClientConfig(
++            slug="test",
++            name="Тест",
++            partner_channels=[],
++            clubs={1: {"revenue_exclude": [{"kind": "bar", "from": "2026-05-01"}]}},
++        )
++
++    def test_excluded_kind_dropped_from_report_month_onward(self):
++        report = club_monthly_report(self.conn, self.cfg, 1, "2026-05")
++        self.assertEqual(report["revenue"], 500.0)  # только membership, бар исключён
++
++    def test_earlier_month_unaffected(self):
++        report = club_monthly_report(self.conn, self.cfg, 1, "2026-04")
++        self.assertEqual(report["revenue"], 100.0)  # бар за апрель ещё считается
++
++
+ class TrainerReportTest(unittest.TestCase):
+     def setUp(self):
+         self.conn, self.cfg, _ = demo_db()

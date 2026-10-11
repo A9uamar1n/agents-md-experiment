@@ -1,0 +1,81 @@
+{
+  "run_id": "T2-B-01",
+  "task": "T2",
+  "condition": "B",
+  "repeat": 1,
+  "model": "sonnet",
+  "claude_version": "2.1.280 (Claude Code)",
+  "started_at": "2026-10-10T11:07:47+00:00",
+  "steps": [
+    {
+      "returncode": 1,
+      "tool_uses": [],
+      "result": {
+        "session_id": "3ff460b0-bad6-468a-af35-616cdbe20528",
+        "is_error": true,
+        "subtype": "success",
+        "num_turns": 1,
+        "duration_ms": 541800,
+        "total_cost_usd": 0,
+        "result": "API Error: Can't reach the API server — check your internet or DNS (EAI_AGAIN)",
+        "usage": {
+          "output_tokens_details": {
+            "thinking_tokens": 0
+          },
+          "input_tokens": 0,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "output_tokens": 0,
+          "server_tool_use": {
+            "web_search_requests": 0,
+            "web_fetch_requests": 0
+          },
+          "service_tier": "standard",
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "inference_geo": "",
+          "iterations": [],
+          "speed": "standard"
+        },
+        "modelUsage": {}
+      },
+      "init": {
+        "model": "claude-sonnet-5",
+        "claude_code_version": "2.1.280",
+        "tools": [
+          "Task",
+          "Bash",
+          "CronCreate",
+          "CronDelete",
+          "CronList",
+          "DesignSync",
+          "Edit",
+          "EnterWorktree",
+          "ExitWorktree",
+          "Glob",
+          "Grep",
+          "ListAgents",
+          "Monitor",
+          "NotebookEdit",
+          "PushNotification",
+          "Read",
+          "RemoteTrigger",
+          "ReportFindings",
+          "ScheduleWakeup",
+          "SendMessage",
+          "Skill",
+          "TaskStop",
+          "ToolSearch",
+          "WebFetch",
+          "WebSearch",
+          "Write"
+        ],
+        "permissionMode": "acceptEdits"
+      }
+    }
+  ],
+  "finished_at": "2026-10-10T11:17:35+00:00",
+  "total_cost_usd": 0
+}

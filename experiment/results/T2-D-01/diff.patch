@@ -1,0 +1,75 @@
+diff --git a/fitstat/reports.py b/fitstat/reports.py
+index 56b08ef..87f2331 100755
+--- a/fitstat/reports.py
++++ b/fitstat/reports.py
+@@ -21,6 +21,36 @@ def _scalar(conn: sqlite3.Connection, sql: str, params: tuple) -> int:
+     return conn.execute(sql, params).fetchone()[0] or 0
+ 
+ 
++def _trial_conversion(conn: sqlite3.Connection, club_id: int, start: str, end: str) -> float | None:
++    """Доля когорты месяца (первый пробный визит в [start, end)), купившей абонемент
++    в день первого пробного визита или в следующие 14 календарных дней."""
++    rows = conn.execute(
++        """
++        WITH first_trial AS (
++            SELECT person_id, MIN(visit_date) AS first_date
++            FROM visits
++            WHERE club_id = ? AND visit_type IN ('trial', 'guest_pass')
++            GROUP BY person_id
++        )
++        SELECT EXISTS (
++            SELECT 1 FROM sales
++            WHERE sales.club_id = ? AND sales.person_id = first_trial.person_id
++              AND sales.kind = 'membership'
++              AND sales.sale_date >= first_trial.first_date
++              AND sales.sale_date <= date(first_trial.first_date, '+14 days')
++        )
++        FROM first_trial
++        WHERE first_date >= ? AND first_date < ?
++        """,
++        (club_id, club_id, start, end),
++    ).fetchall()
++
++    if not rows:
++        return None
++    converted = sum(row[0] for row in rows)
++    return round(converted / len(rows), 3)
++
++
+ def club_monthly_report(conn: sqlite3.Connection, cfg: ClientConfig, club_id: int, month: str) -> dict:
+     start, end = _month_bounds(month)
+     period = (club_id, start, end)
+@@ -58,6 +88,7 @@ def club_monthly_report(conn: sqlite3.Connection, cfg: ClientConfig, club_id: in
+         " WHERE club_id = ? AND sale_date >= ? AND sale_date < ? AND kind = 'personal_training'",
+         period,
+     )
++    trial_conversion = _trial_conversion(conn, club_id, start, end)
+ 
+     return {
+         "club_id": club_id,
+@@ -68,6 +99,7 @@ def club_monthly_report(conn: sqlite3.Connection, cfg: ClientConfig, club_id: in
+         "active_members": active_members,
+         "pt_sessions": pt_sessions,
+         "pt_revenue": to_rubles(pt_revenue),
++        "trial_conversion": trial_conversion,
+     }
+ 
+ 
+diff --git a/tests/test_reports.py b/tests/test_reports.py
+index ad002b9..6f61e44 100755
+--- a/tests/test_reports.py
++++ b/tests/test_reports.py
+@@ -16,11 +16,13 @@ class ClubReportTest(unittest.TestCase):
+         self.assertEqual(report["active_members"], 2)
+         self.assertEqual(report["pt_sessions"], 1)
+         self.assertEqual(report["pt_revenue"], 2000.0)
++        self.assertEqual(report["trial_conversion"], 1.0)
+ 
+     def test_empty_month(self):
+         report = club_monthly_report(self.conn, self.cfg, 2, "2026-03")
+         self.assertEqual(report["revenue"], 0.0)
+         self.assertEqual(report["visits"], 0)
++        self.assertIsNone(report["trial_conversion"])
+ 
+ 
+ class TrainerReportTest(unittest.TestCase):

@@ -1,0 +1,214 @@
+{
+  "run_id": "T1-A-01",
+  "task": "T1",
+  "condition": "A",
+  "repeat": 1,
+  "model": "sonnet",
+  "claude_version": "2.1.280 (Claude Code)",
+  "started_at": "2026-10-10T14:45:34+00:00",
+  "steps": [
+    {
+      "returncode": 0,
+      "tool_uses": [
+        {
+          "tool": "Bash",
+          "target": "ls && echo --- && find . -iname \"*club_monthly_report*\" -not -path \"*/node_modules/*\""
+        },
+        {
+          "tool": "Bash",
+          "target": "find . -path \"*/node_modules/*\" -prune -o -type f -print | grep -v \"^\\./\\.\" | head -200"
+        },
+        {
+          "tool": "Read",
+          "target": "fitstat/reports.py"
+        },
+        {
+          "tool": "Read",
+          "target": "clients/alpha.toml"
+        },
+        {
+          "tool": "Read",
+          "target": "docs/metrics.md"
+        },
+        {
+          "tool": "Bash",
+          "target": "head -3 raw/alpha/sales.csv && echo --- && awk -F',' 'NR==1{for(i=1;i<=NF;i++) if($i==\"kind\") k=i; for(i=1;i<=NF;i++) if($i==\"club_id\") c=i; next} {print $k}' raw/alpha/sales.csv | sort -u"
+        },
+        {
+          "tool": "Read",
+          "target": "raw/alpha/sales.csv"
+        },
+        {
+          "tool": "Bash",
+          "target": "cd /tmp/fitstat-runs/T1-A-01/repo/raw/alpha && python3 - <<'EOF'\nimport csv\nkinds=set()\nclub7bar=0\nwith open('sales.csv') as f:\n    r=csv.DictReader(f)\n    for row in r:\n        kinds.add(row['kind'])\n        if row['kind']=='bar':\n            club7bar+=1\nprint(kinds)\nprint(\"bar rows total\", club7ba"
+        },
+        {
+          "tool": "Read",
+          "target": "fitstat/config.py"
+        },
+        {
+          "tool": "Read",
+          "target": "fitstat/money.py"
+        },
+        {
+          "tool": "Read",
+          "target": "tests/test_reports.py"
+        },
+        {
+          "tool": "Bash",
+          "target": "python3 - <<'EOF'\nimport csv\nfrom collections import Counter\nrows=[]\nwith open('sales.csv') as f:\n    r=csv.DictReader(f)\n    for row in r:\n        rows.append(row)\ndates=[row['sale_date'] for row in rows]\nprint(\"min date\", min(dates), \"max date\", max(dates))\nc7bar = [row for row in rows if row['clu"
+        },
+        {
+          "tool": "Read",
+          "target": "legacy/METRICS.md"
+        },
+        {
+          "tool": "Read",
+          "target": "clients/beta.toml"
+        },
+        {
+          "tool": "Bash",
+          "target": "cd /tmp/fitstat-runs/T1-A-01/repo && cat legacy/report_v1.sql"
+        },
+        {
+          "tool": "Bash",
+          "target": "cd /tmp/fitstat-runs/T1-A-01/repo/raw/alpha && python3 - <<'EOF'\nimport csv\nfrom collections import Counter\nwith open('sales.csv') as f:\n    r=csv.DictReader(f)\n    rows=[row for row in r if row['club_id']=='7' and row['kind']=='bar']\nc=Counter(row['channel'] for row in rows)\nprint(c)\nafter=[row for"
+        },
+        {
+          "tool": "Bash",
+          "target": "cd /tmp/fitstat-runs/T1-A-01/repo && cat tests/fixtures/raw/demo/clubs.csv && echo --- && cat tests/fixtures/raw/demo/sales.csv && echo --- && cat tests/fixtures/clients/demo.toml && echo --- && cat tests/helpers.py"
+        },
+        {
+          "tool": "Bash",
+          "target": "grep -rn \"closed_since\" --include=\"*.py\" --include=\"*.md\" --include=\"*.toml\" ."
+        },
+        {
+          "tool": "Edit",
+          "target": "fitstat/reports.py"
+        },
+        {
+          "tool": "Edit",
+          "target": "fitstat/reports.py"
+        },
+        {
+          "tool": "Edit",
+          "target": "clients/alpha.toml"
+        },
+        {
+          "tool": "Edit",
+          "target": "tests/test_reports.py"
+        },
+        {
+          "tool": "Bash",
+          "target": "python3 -m pytest tests/ -q 2>&1 | tail -40 || python3 -m unittest discover -s tests -v 2>&1 | tail -60"
+        },
+        {
+          "tool": "Bash",
+          "target": "python3 -m unittest discover -s tests -v 2>&1 | tail -60"
+        },
+        {
+          "tool": "Bash",
+          "target": "python3 - <<'EOF'\nfrom fitstat.config import load_config\nfrom fitstat.db import connect\nfrom fitstat.importer import import_client\nfrom fitstat.reports import club_monthly_report\nfrom pathlib import Path\n\ncfg = load_config(\"alpha\")\nconn = connect()\nimport_client(conn, cfg, Path(\"raw/alpha\"))\n\nfor mo"
+        },
+        {
+          "tool": "Bash",
+          "target": "git diff --stat"
+        }
+      ],
+      "result": {
+        "session_id": "dfe3f061-b8de-467e-a8e5-ea7e9aec7ac4",
+        "is_error": false,
+        "subtype": "success",
+        "num_turns": 27,
+        "duration_ms": 125735,
+        "total_cost_usd": 0.3363384000000001,
+        "result": "## Что сделано\n\n1. **`fitstat/reports.py`** — в `club_monthly_report` добавлена опциональная фильтрация выручки по виду продаж и дате: если в конфиге клуба заданы `revenue_exclude_kind` и `revenue_exclude_since`, продажи этого вида с `sale_date >= revenue_exclude_since` не попадают в сумму `revenue`. Механизм общий (не привязан к бару/клубу 7), по аналогии с уже существующим `closed_since`.\n\n2. **`clients/alpha.toml`** — для клуба 7 добавлено:\n   ```toml\n   [clubs.7]\n   revenue_exclude_kind = \"bar\"\n   revenue_exclude_since = \"2026-05-01\"\n   ```\n\n3. **`tests/test_reports.py`** — два теста: выручка за апрель (до аренды) ещё включает бар, а за май (с даты аренды) — уже не включает.\n\nПроверил и на реальных данных Альфы: клуб 7 — апрель 216 413 ₽ (бар внутри), май 192 910.5 ₽ и июнь 185 308 ₽ (бар исключён). Полный набор тестов проходит (14/14).\n\n## Решения\n\n- Правка точечная — именно `revenue` в `club_monthly_report`. `revenue_own` трогать не стал: вы просили только про `revenue`, а в задаче не было указания на изменение собственной выручки. Все бар-продажи клуба 7 идут через канал `own`, так что `revenue_own` сейчас всё ещё включает их — если это тоже нужно скорректировать, скажите отдельно.\n- `network_monthly_report` и `pt_revenue`/`pt_sessions` не трогал: они либо не про бар, либо сеть просто суммирует `revenue` клубов, так что исправление само \"протекает\" в сетевой отчёт.\n- Сделал механизм конфигурируемым (вид продажи + дата), а не хардкодом \"бар/клуб 7/май 2026\" в коде отчётов — чтобы соответствовать стилю существующего `closed_since` и не трогать Бету.",
+        "usage": {
+          "input_tokens": 42,
+          "cache_creation_input_tokens": 23749,
+          "cache_read_input_tokens": 720042,
+          "output_tokens": 9725,
+          "output_tokens_details": {
+            "thinking_tokens": 4265
+          },
+          "server_tool_use": {
+            "web_search_requests": 0,
+            "web_fetch_requests": 0
+          },
+          "service_tier": "standard",
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 23749,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "inference_geo": "global",
+          "iterations": [
+            {
+              "input_tokens": 2,
+              "output_tokens": 726,
+              "cache_read_input_tokens": 43370,
+              "cache_creation_input_tokens": 252,
+              "cache_creation": {
+                "ephemeral_5m_input_tokens": 0,
+                "ephemeral_1h_input_tokens": 252
+              },
+              "type": "message"
+            }
+          ],
+          "speed": "standard"
+        },
+        "modelUsage": {
+          "claude-sonnet-5": {
+            "inputTokens": 42,
+            "outputTokens": 9725,
+            "cacheReadInputTokens": 720042,
+            "cacheCreationInputTokens": 23749,
+            "webSearchRequests": 0,
+            "costUSD": 0.3363384000000001,
+            "contextWindow": 1000000,
+            "maxOutputTokens": 64000,
+            "thinkingTokens": 4265,
+            "canonicalModel": "claude-sonnet-5",
+            "provider": "firstParty",
+            "costBasis": "list"
+          }
+        }
+      },
+      "init": {
+        "model": "claude-sonnet-5",
+        "claude_code_version": "2.1.280",
+        "tools": [
+          "Task",
+          "Bash",
+          "CronCreate",
+          "CronDelete",
+          "CronList",
+          "DesignSync",
+          "Edit",
+          "EnterWorktree",
+          "ExitWorktree",
+          "Glob",
+          "Grep",
+          "ListAgents",
+          "Monitor",
+          "NotebookEdit",
+          "PushNotification",
+          "Read",
+          "RemoteTrigger",
+          "ReportFindings",
+          "ScheduleWakeup",
+          "SendMessage",
+          "Skill",
+          "TaskStop",
+          "ToolSearch",
+          "WebFetch",
+          "WebSearch",
+          "Write"
+        ],
+        "permissionMode": "acceptEdits"
+      }
+    }
+  ],
+  "teamlead": [],
+  "finished_at": "2026-10-10T14:47:54+00:00",
+  "total_cost_usd": 0.3363
+}

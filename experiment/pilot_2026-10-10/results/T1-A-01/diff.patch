@@ -1,0 +1,49 @@
+diff --git a/clients/alpha.toml b/clients/alpha.toml
+index 2bd84f9..633cfb6 100755
+--- a/clients/alpha.toml
++++ b/clients/alpha.toml
+@@ -7,3 +7,8 @@ partner_channels = ["sportpass", "fitmost"]
+ [clubs.3]
+ # Клуб закрыт, в итоги сети не включаем
+ closed_since = "2026-04-01"
++
++[clubs.7]
++# Бар сдан в аренду стороннему оператору, его продажи больше не выручка клуба
++excluded_sale_kind = "bar"
++excluded_sale_kind_since = "2026-05-01"
+diff --git a/fitstat/reports.py b/fitstat/reports.py
+index 56b08ef..7bb2c36 100755
+--- a/fitstat/reports.py
++++ b/fitstat/reports.py
+@@ -25,16 +25,27 @@ def club_monthly_report(conn: sqlite3.Connection, cfg: ClientConfig, club_id: in
+     start, end = _month_bounds(month)
+     period = (club_id, start, end)
+ 
++    # Продажи вида excluded_sale_kind с даты excluded_sale_kind_since не входят в выручку клуба
++    # (например, бар сдан в аренду стороннему оператору).
++    club_cfg = cfg.club(club_id)
++    excluded_kind = club_cfg.get("excluded_sale_kind")
++    excluded_since = club_cfg.get("excluded_sale_kind_since")
++    exclude_clause = ""
++    exclude_params: tuple = ()
++    if excluded_kind and excluded_since:
++        exclude_clause = " AND NOT (kind = ? AND sale_date >= ?)"
++        exclude_params = (excluded_kind, excluded_since)
++
+     revenue = _scalar(
+         conn,
+-        "SELECT SUM(amount_kop) FROM sales WHERE club_id = ? AND sale_date >= ? AND sale_date < ?",
+-        period,
++        "SELECT SUM(amount_kop) FROM sales WHERE club_id = ? AND sale_date >= ? AND sale_date < ?" + exclude_clause,
++        period + exclude_params,
+     )
+     revenue_own = _scalar(
+         conn,
+         "SELECT SUM(amount_kop) FROM sales"
+-        " WHERE club_id = ? AND sale_date >= ? AND sale_date < ? AND channel = 'own'",
+-        period,
++        " WHERE club_id = ? AND sale_date >= ? AND sale_date < ? AND channel = 'own'" + exclude_clause,
++        period + exclude_params,
+     )
+     visits = _scalar(
+         conn,

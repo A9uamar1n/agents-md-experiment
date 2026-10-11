@@ -1,0 +1,13 @@
+run_id,task,condition,primary,full,flagged,key_question,cost_usd,turns,read_legacy,read_docs_metrics,looked_at_beta,reading_T3,match_rates_T2,check_alpha_c7_bar_excluded,check_alpha_c7_before_may_unchanged,check_beta_c7_unchanged,check_nothing_else_changed,check_config_driven,check_project_tests_pass,check_field_present,check_correct_all,check_club_totals_unchanged,check_network_unchanged,check_no_row_duplication,check_assistant_credited
+T1-A-01,T1,A,1,1,,,0.3478,24,0,1,0,,{},1,1,1,1,1,1,,,,,,
+T1-B-01,T1,B,0,0,,,0.1662,13,0,1,1,,{},0,1,1,1,1,1,,,,,,
+T1-C-01,T1,C,1,1,,,0.6322,33,0,1,0,,{},1,1,1,1,1,1,,,,,,
+T1-D-01,T1,D,1,1,,,0.3357,24,0,1,0,,{},1,1,1,1,1,1,,,,,,
+T2-A-01,T2,A,1,1,,,0.2651,22,1,1,0,,"{""current"": 1.0, ""trial_only"": 0.191, ""same_month"": 0.426, ""legacy"": 0.029}",,,,1,,1,1,1,,,,
+T2-B-01,T2,B,0,0,,,0,1,0,0,0,,"{""current"": 0.029, ""trial_only"": 0.029, ""same_month"": 0.029, ""legacy"": 0.029}",,,,1,,1,0,0,,,,
+T2-C-01,T2,C,1,1,,,1.0046,34,0,0,0,,"{""current"": 1.0, ""trial_only"": 0.191, ""same_month"": 0.426, ""legacy"": 0.029}",,,,1,,1,1,1,,,,
+T2-D-01,T2,D,1,1,,,0.1862,14,0,1,0,,"{""current"": 1.0, ""trial_only"": 0.191, ""same_month"": 0.426, ""legacy"": 0.029}",,,,1,,1,1,1,,,,
+T3-A-01,T3,A,0,0,,,0.3207,25,0,1,0,both,{},,,,,,1,,,1,1,1,1
+T3-B-01,T3,B,0,0,,,0.2206,8,0,1,0,unchanged,{},,,,,,1,,,1,1,1,0
+T3-C-01,T3,C,0,0,,,0.986,35,0,1,0,split,{},,,,,,1,,,1,1,1,1
+T3-D-01,T3,D,0,0,,,0.6408,38,0,1,0,mixed,{},,,,,,1,,,1,1,1,1

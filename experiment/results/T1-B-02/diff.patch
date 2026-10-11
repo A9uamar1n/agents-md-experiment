@@ -1,0 +1,107 @@
+diff --git a/clients/alpha.toml b/clients/alpha.toml
+index 2bd84f9..d23fc0d 100755
+--- a/clients/alpha.toml
++++ b/clients/alpha.toml
+@@ -7,3 +7,8 @@ partner_channels = ["sportpass", "fitmost"]
+ [clubs.3]
+ # Клуб закрыт, в итоги сети не включаем
+ closed_since = "2026-04-01"
++
++[clubs.7]
++# Бар клуба с мая 2026 сдан в аренду стороннему оператору,
++# его продажи больше не доход сети
++bar_excluded_since = "2026-05-01"
+diff --git a/docs/metrics.md b/docs/metrics.md
+index fa00a33..62d9943 100755
+--- a/docs/metrics.md
++++ b/docs/metrics.md
+@@ -9,8 +9,10 @@
+ ## Выручка — `revenue`
+ Сумма всех продаж клуба за месяц: абонементы, персональные тренировки, бар. Все каналы продаж.
+ 
++Если для клуба в `clients/<client>.toml` задан `bar_excluded_since` (дата), то начиная с месяца, в который попадает эта дата, и далее продажи вида `bar` этого клуба в `revenue` не включаются (например, бар клуба сдан в аренду стороннему оператору и больше не доход сети).
++
+ ## Собственная выручка — `revenue_own`
+-То же, что `revenue`, но только продажи через собственный канал клуба, без партнёров-агрегаторов.
++То же, что `revenue`, но только продажи через собственный канал клуба, без партнёров-агрегаторов. Исключение продаж `bar` по `bar_excluded_since` (см. `revenue`) действует и здесь.
+ 
+ ## Визиты — `visits`
+ Количество визитов любого типа.
+diff --git a/fitstat/reports.py b/fitstat/reports.py
+index 56b08ef..a17afb7 100755
+--- a/fitstat/reports.py
++++ b/fitstat/reports.py
+@@ -25,15 +25,21 @@ def club_monthly_report(conn: sqlite3.Connection, cfg: ClientConfig, club_id: in
+     start, end = _month_bounds(month)
+     period = (club_id, start, end)
+ 
++    # bar_excluded_since в конфиге клиента: с этого месяца продажи вида 'bar'
++    # этого клуба не считаются доходом сети (например, бар сдан в аренду).
++    bar_excluded_since = cfg.club(club_id).get("bar_excluded_since")
++    exclude_bar = bool(bar_excluded_since) and bar_excluded_since <= start
++    bar_filter = " AND kind != 'bar'" if exclude_bar else ""
++
+     revenue = _scalar(
+         conn,
+-        "SELECT SUM(amount_kop) FROM sales WHERE club_id = ? AND sale_date >= ? AND sale_date < ?",
++        "SELECT SUM(amount_kop) FROM sales WHERE club_id = ? AND sale_date >= ? AND sale_date < ?" + bar_filter,
+         period,
+     )
+     revenue_own = _scalar(
+         conn,
+         "SELECT SUM(amount_kop) FROM sales"
+-        " WHERE club_id = ? AND sale_date >= ? AND sale_date < ? AND channel = 'own'",
++        " WHERE club_id = ? AND sale_date >= ? AND sale_date < ? AND channel = 'own'" + bar_filter,
+         period,
+     )
+     visits = _scalar(
+diff --git a/tests/test_reports.py b/tests/test_reports.py
+index ad002b9..548c853 100755
+--- a/tests/test_reports.py
++++ b/tests/test_reports.py
+@@ -1,5 +1,7 @@
+ import unittest
+ 
++from fitstat.config import ClientConfig
++from fitstat.db import connect, create_schema
+ from fitstat.reports import club_monthly_report, network_monthly_report, trainer_monthly_report
+ from tests.helpers import demo_db
+ 
+@@ -54,5 +56,37 @@ class NetworkReportTest(unittest.TestCase):
+         self.assertEqual(report["revenue"], 100.0)
+ 
+ 
++class BarExcludedSinceTest(unittest.TestCase):
++    """Клуб с bar_excluded_since в конфиге: продажи 'bar' перестают быть доходом с этого месяца."""
++
++    def setUp(self):
++        self.conn = connect()
++        create_schema(self.conn)
++        self.conn.execute("INSERT INTO clubs VALUES (1, 'Клуб', '2020-01-01')")
++        self.conn.executemany(
++            "INSERT INTO sales (id, club_id, person_id, sale_date, kind, amount_kop, channel)"
++            " VALUES (?, ?, ?, ?, ?, ?, ?)",
++            [
++                (1, 1, None, "2026-04-20", "bar", 10000, "own"),
++                (2, 1, None, "2026-05-05", "bar", 20000, "own"),
++                (3, 1, 1, "2026-05-10", "membership", 50000, "own"),
++            ],
++        )
++        self.conn.commit()
++        self.cfg = ClientConfig(
++            slug="demo2", name="Демо2", partner_channels=[], clubs={1: {"bar_excluded_since": "2026-05-01"}}
++        )
++
++    def test_bar_excluded_from_target_month(self):
++        report = club_monthly_report(self.conn, self.cfg, 1, "2026-05")
++        self.assertEqual(report["revenue"], 500.0)
++        self.assertEqual(report["revenue_own"], 500.0)
++
++    def test_bar_still_counted_before_exclusion(self):
++        report = club_monthly_report(self.conn, self.cfg, 1, "2026-04")
++        self.assertEqual(report["revenue"], 100.0)
++        self.assertEqual(report["revenue_own"], 100.0)
++
++
+ if __name__ == "__main__":
+     unittest.main()

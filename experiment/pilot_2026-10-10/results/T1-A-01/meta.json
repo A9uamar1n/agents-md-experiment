@@ -1,0 +1,209 @@
+{
+  "run_id": "T1-A-01",
+  "task": "T1",
+  "condition": "A",
+  "repeat": 1,
+  "model": "sonnet",
+  "claude_version": "2.1.280 (Claude Code)",
+  "started_at": "2026-10-10T10:56:46+00:00",
+  "steps": [
+    {
+      "returncode": 0,
+      "tool_uses": [
+        {
+          "tool": "Read",
+          "target": "fitstat/reports.py"
+        },
+        {
+          "tool": "Read",
+          "target": "fitstat/db.py"
+        },
+        {
+          "tool": "Read",
+          "target": "fitstat/config.py"
+        },
+        {
+          "tool": "Bash",
+          "target": "cat /tmp/fitstat-runs/T1-A-01/repo/clients/alpha.toml"
+        },
+        {
+          "tool": "Read",
+          "target": "docs/metrics.md"
+        },
+        {
+          "tool": "Bash",
+          "target": "ls /tmp/fitstat-runs/T1-A-01/repo/tests/ && ls /tmp/fitstat-runs/T1-A-01/repo/tests/fixtures/"
+        },
+        {
+          "tool": "Read",
+          "target": "tests/test_reports.py"
+        },
+        {
+          "tool": "Bash",
+          "target": "find /tmp/fitstat-runs/T1-A-01/repo/tests/fixtures -type f | xargs -I{} echo {} "
+        },
+        {
+          "tool": "Grep",
+          "target": "."
+        },
+        {
+          "tool": "Bash",
+          "target": "find /tmp/fitstat-runs/T1-A-01/repo/raw -maxdepth 2 -type d"
+        },
+        {
+          "tool": "Bash",
+          "target": "cat /tmp/fitstat-runs/T1-A-01/repo/raw/alpha/clubs.csv 2>/dev/null; echo ---; awk -F, '{print $2}' /tmp/fitstat-runs/T1-A-01/repo/raw/alpha/sales.csv | sort -u"
+        },
+        {
+          "tool": "Bash",
+          "target": "cat /tmp/fitstat-runs/T1-A-01/repo/raw/alpha/clubs.csv"
+        },
+        {
+          "tool": "Bash",
+          "target": "awk -F, '{print $2}' /tmp/fitstat-runs/T1-A-01/repo/raw/alpha/sales.csv | sort -u"
+        },
+        {
+          "tool": "Grep",
+          "target": "raw/alpha/sales.csv"
+        },
+        {
+          "tool": "Edit",
+          "target": "clients/alpha.toml"
+        },
+        {
+          "tool": "Edit",
+          "target": "fitstat/reports.py"
+        },
+        {
+          "tool": "Bash",
+          "target": "python -m unittest discover -s tests 2>&1 | tail -30"
+        },
+        {
+          "tool": "Bash",
+          "target": "python3 -m unittest discover -s tests 2>&1 | tail -40"
+        },
+        {
+          "tool": "Bash",
+          "target": "python3 -c \"\nfrom fitstat import importer, config, db, reports\nimport tempfile, os\n\ncfg = config.load_config('alpha')\nconn = db.connect(':memory:')\ndb.create_schema(conn)\nimporter.import_client(conn, cfg, 'alpha') if hasattr(importer, 'import_client') else None\n\" 2>&1 | tail -20"
+        },
+        {
+          "tool": "Bash",
+          "target": "python3 -c \"\nfrom fitstat import importer, config, db, reports\n\ncfg = config.load_config('alpha')\nconn = db.connect(':memory:')\nimporter.import_client(conn, cfg, 'alpha')\n\nfor month in ['2026-04', '2026-05', '2026-06']:\n    r = reports.club_monthly_report(conn, cfg, 7, month)\n    print(month, r['rev"
+        },
+        {
+          "tool": "Read",
+          "target": "fitstat/importer.py"
+        },
+        {
+          "tool": "Bash",
+          "target": "python3 -c \"\nfrom fitstat import importer, config, db, reports\n\ncfg = config.load_config('alpha')\nconn = db.connect(':memory:')\nimporter.import_client(conn, cfg)\n\nfor month in ['2026-04', '2026-05', '2026-06']:\n    r = reports.club_monthly_report(conn, cfg, 7, month)\n    print(month, r['revenue'], r"
+        },
+        {
+          "tool": "Bash",
+          "target": "python3 -c \"\nfrom fitstat import importer, config, db\nfrom fitstat.money import to_rubles\n\ncfg = config.load_config('alpha')\nconn = db.connect(':memory:')\nimporter.import_client(conn, cfg)\n\nbar_may = conn.execute(\\\"SELECT SUM(amount_kop) FROM sales WHERE club_id=7 AND kind='bar' AND sale_date>='2026"
+        }
+      ],
+      "result": {
+        "session_id": "e8c57a4f-752b-421d-a478-fb70301f5ad3",
+        "is_error": false,
+        "subtype": "success",
+        "num_turns": 24,
+        "duration_ms": 103162,
+        "total_cost_usd": 0.3478444,
+        "result": "Implemented and verified. Summary:\n\n**Change:** Added a per-club config option (`excluded_sale_kind` / `excluded_sale_kind_since`) and wired it into `club_monthly_report` in `fitstat/reports.py`. For club 7 of client Alpha, `clients/alpha.toml` now sets `excluded_sale_kind = \"bar\"` with `excluded_sale_kind_since = \"2026-05-01\"`.\n\n**Logic:** both `revenue` and `revenue_own` queries now add `AND NOT (kind = ? AND sale_date >= ?)` when a club has this config set. This means:\n- Bar sales dated before 2026-05-01 still count (past reports unaffected).\n- Bar sales dated on/after 2026-05-01 are excluded from both `revenue` and `revenue_own` (bar is rented out regardless of channel), for this report and all future months.\n- `network_monthly_report` picks this up automatically since it sums `club_monthly_report` results per club — no change needed there.\n- `pt_revenue`, `visits`, `active_members`, `pt_sessions` are untouched since they're unrelated to `kind = 'bar'`.\n\n**Design decisions:**\n- Kept the config-driven approach consistent with the existing `closed_since` pattern (client-specific business exception lives in `clients/<slug>.toml`, not hardcoded in `reports.py`), since this is a one-off commercial arrangement for one club, not a general metric redefinition — didn't touch `docs/metrics.md` for the same reason `closed_since` isn't documented there either.\n- Didn't change the `club_monthly_report` signature (per the \"don't change\" rule in CLAUDE.md) — the exclusion is driven entirely by the already-passed `cfg` argument.\n- Kept the config keys singular (`excluded_sale_kind`, not a list) since only one kind/club is affected — avoided building generic multi-kind/multi-club machinery that isn't needed yet.\n\n**Verification:** ran the full test suite (`python3 -m unittest discover -s tests`, 12 tests, all pass) and manually imported Alpha's real CSV data to confirm: April 2026 club-7 revenue still includes bar sales, May 2026 onward excludes them (verified the exact kopeck delta matches the bar sales sum for May), and the network report reflects the reduced total.",
+        "usage": {
+          "input_tokens": 34,
+          "cache_creation_input_tokens": 30898,
+          "cache_read_input_tokens": 711122,
+          "output_tokens": 8196,
+          "output_tokens_details": {
+            "thinking_tokens": 3367
+          },
+          "server_tool_use": {
+            "web_search_requests": 0,
+            "web_fetch_requests": 0
+          },
+          "service_tier": "standard",
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 30898,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "inference_geo": "global",
+          "iterations": [
+            {
+              "input_tokens": 2,
+              "output_tokens": 979,
+              "cache_read_input_tokens": 50278,
+              "cache_creation_input_tokens": 493,
+              "cache_creation": {
+                "ephemeral_5m_input_tokens": 0,
+                "ephemeral_1h_input_tokens": 493
+              },
+              "type": "message"
+            }
+          ],
+          "speed": "standard"
+        },
+        "modelUsage": {
+          "claude-sonnet-5": {
+            "inputTokens": 34,
+            "outputTokens": 8196,
+            "cacheReadInputTokens": 711122,
+            "cacheCreationInputTokens": 30898,
+            "webSearchRequests": 0,
+            "costUSD": 0.3478444,
+            "contextWindow": 1000000,
+            "maxOutputTokens": 64000,
+            "thinkingTokens": 3367,
+            "canonicalModel": "claude-sonnet-5",
+            "provider": "firstParty",
+            "costBasis": "list"
+          }
+        }
+      },
+      "init": {
+        "model": "claude-sonnet-5",
+        "claude_code_version": "2.1.280",
+        "tools": [
+          "Task",
+          "Bash",
+          "CronCreate",
+          "CronDelete",
+          "CronList",
+          "DesignSync",
+          "Edit",
+          "EnterWorktree",
+          "ExitWorktree",
+          "Glob",
+          "Grep",
+          "ListAgents",
+          "Monitor",
+          "NotebookEdit",
+          "PushNotification",
+          "Read",
+          "RemoteTrigger",
+          "ReportFindings",
+          "ScheduleWakeup",
+          "SendMessage",
+          "Skill",
+          "TaskStop",
+          "ToolSearch",
+          "WebFetch",
+          "WebSearch",
+          "Write",
+          "mcp__claude_ai_Claude_Docs__batch",
+          "mcp__claude_ai_Claude_Docs__create",
+          "mcp__claude_ai_Claude_Docs__delete",
+          "mcp__claude_ai_Claude_Docs__export",
+          "mcp__claude_ai_Claude_Docs__guide",
+          "mcp__claude_ai_Claude_Docs__query",
+          "mcp__claude_ai_Claude_Docs__read",
+          "mcp__claude_ai_Claude_Docs__update"
+        ],
+        "permissionMode": "acceptEdits"
+      }
+    }
+  ],
+  "finished_at": "2026-10-10T10:58:43+00:00",
+  "total_cost_usd": 0.3478
+}

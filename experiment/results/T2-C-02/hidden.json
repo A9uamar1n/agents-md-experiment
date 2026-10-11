@@ -1,0 +1,18 @@
+{
+  "task": "T2",
+  "checks": {
+    "field_present": true,
+    "correct_all": true,
+    "nothing_else_changed": true,
+    "project_tests_pass": true
+  },
+  "info": {
+    "match_rates": {
+      "current": 1.0,
+      "trial_only": 0.191,
+      "same_month": 0.426,
+      "legacy": 0.029
+    }
+  },
+  "errors": []
+}

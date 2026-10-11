@@ -1,0 +1,194 @@
+diff --git a/fitstat/db.py b/fitstat/db.py
+index 4e15917..3d1f390 100755
+--- a/fitstat/db.py
++++ b/fitstat/db.py
+@@ -40,7 +40,8 @@ CREATE TABLE sessions (
+     trainer_id INTEGER NOT NULL,
+     person_id INTEGER NOT NULL,
+     session_date TEXT NOT NULL,
+-    sale_id INTEGER NOT NULL
++    sale_id INTEGER NOT NULL,
++    assistant_trainer_id INTEGER            -- второй тренер при тренировке вдвоём
+ );
+ """
+ 
+diff --git a/fitstat/importer.py b/fitstat/importer.py
+index 0eba7b3..12c4547 100755
+--- a/fitstat/importer.py
++++ b/fitstat/importer.py
+@@ -60,9 +60,8 @@ def import_client(conn: sqlite3.Connection, cfg: ClientConfig, raw_dir: Path | N
+                 channel(r["channel"]),
+             ),
+         ),
+-        # Колонка assistant_trainer_id в выгрузке есть, но пока не используется
+         "sessions": (
+-            "INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?)",
++            "INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?)",
+             lambda r: (
+                 int(r["id"]),
+                 int(r["club_id"]),
+@@ -70,6 +69,7 @@ def import_client(conn: sqlite3.Connection, cfg: ClientConfig, raw_dir: Path | N
+                 int(r["person_id"]),
+                 r["session_date"],
+                 int(r["sale_id"]),
++                _nullable_int(r["assistant_trainer_id"]),
+             ),
+         ),
+     }
+diff --git a/fitstat/reports.py b/fitstat/reports.py
+index 56b08ef..d4f09f6 100755
+--- a/fitstat/reports.py
++++ b/fitstat/reports.py
+@@ -7,7 +7,7 @@ from __future__ import annotations
+ import sqlite3
+ 
+ from fitstat.config import ClientConfig
+-from fitstat.money import to_rubles
++from fitstat.money import split_evenly, to_rubles
+ 
+ 
+ def _month_bounds(month: str) -> tuple[str, str]:
+@@ -72,26 +72,59 @@ def club_monthly_report(conn: sqlite3.Connection, cfg: ClientConfig, club_id: in
+ 
+ 
+ def trainer_monthly_report(conn: sqlite3.Connection, cfg: ClientConfig, trainer_id: int, month: str) -> dict:
++    """Тренировки вдвоём (assistant_trainer_id) делятся между парой тренеров:
++    выручка — поровну через split_evenly (лишняя копейка основному тренеру),
++    счётчик `sessions` — целиком, по очереди внутри пары (чтобы разница была не больше одной
++    и ни строки, ни итоги клуба/сети не задваивались).
++    Самоассист (assistant_trainer_id == trainer_id, брак в выгрузке) считается обычной одиночной
++    тренировкой.
++    """
+     start, end = _month_bounds(month)
+     period = (trainer_id, start, end)
+ 
+-    sessions = _scalar(
++    solo_sessions = _scalar(
+         conn,
+-        "SELECT COUNT(*) FROM sessions WHERE trainer_id = ? AND session_date >= ? AND session_date < ?",
++        "SELECT COUNT(*) FROM sessions WHERE trainer_id = ? AND session_date >= ? AND session_date < ?"
++        " AND (assistant_trainer_id IS NULL OR assistant_trainer_id = trainer_id)",
+         period,
+     )
+-    pt_revenue = _scalar(
++    solo_revenue = _scalar(
+         conn,
+         "SELECT SUM(s.amount_kop) FROM sessions ss JOIN sales s ON s.id = ss.sale_id"
+-        " WHERE ss.trainer_id = ? AND ss.session_date >= ? AND ss.session_date < ?",
++        " WHERE ss.trainer_id = ? AND ss.session_date >= ? AND ss.session_date < ?"
++        " AND (ss.assistant_trainer_id IS NULL OR ss.assistant_trainer_id = ss.trainer_id)",
+         period,
+     )
+ 
++    shared_rows = conn.execute(
++        "SELECT ss.id, ss.trainer_id, ss.assistant_trainer_id, s.amount_kop"
++        " FROM sessions ss JOIN sales s ON s.id = ss.sale_id"
++        " WHERE ss.session_date >= ? AND ss.session_date < ?"
++        " AND ss.assistant_trainer_id IS NOT NULL AND ss.assistant_trainer_id != ss.trainer_id"
++        " AND (ss.trainer_id = ? OR ss.assistant_trainer_id = ?)"
++        " ORDER BY ss.id",
++        (start, end, trainer_id, trainer_id),
++    ).fetchall()
++
++    pairs: dict[tuple[int, int], list[tuple[int, int]]] = {}
++    for _session_id, main_id, assistant_id, amount_kop in shared_rows:
++        pair = (min(main_id, assistant_id), max(main_id, assistant_id))
++        pairs.setdefault(pair, []).append((main_id, amount_kop))
++
++    shared_sessions = 0
++    shared_revenue = 0
++    for (low, high), items in pairs.items():
++        for index, (main_id, amount_kop) in enumerate(items):
++            if (low if index % 2 == 0 else high) == trainer_id:
++                shared_sessions += 1
++            main_share, assistant_share = split_evenly(amount_kop, 2)
++            shared_revenue += main_share if main_id == trainer_id else assistant_share
++
+     return {
+         "trainer_id": trainer_id,
+         "month": month,
+-        "sessions": sessions,
+-        "pt_revenue": to_rubles(pt_revenue),
++        "sessions": solo_sessions + shared_sessions,
++        "pt_revenue": to_rubles(solo_revenue + shared_revenue),
+     }
+ 
+ 
+diff --git a/tests/test_reports.py b/tests/test_reports.py
+index ad002b9..331de80 100755
+--- a/tests/test_reports.py
++++ b/tests/test_reports.py
+@@ -1,5 +1,6 @@
+ import unittest
+ 
++from fitstat.money import to_rubles
+ from fitstat.reports import club_monthly_report, network_monthly_report, trainer_monthly_report
+ from tests.helpers import demo_db
+ 
+@@ -38,6 +39,66 @@ class TrainerReportTest(unittest.TestCase):
+         self.assertEqual(report["pt_revenue"], 0.0)
+ 
+ 
++class AssistantTrainerTest(unittest.TestCase):
++    """Тренировки вдвоём: trainer_id=1 и trainer_id=2 — пара, оба из club_id=1 (см. fixtures/raw/demo)."""
++
++    def setUp(self):
++        self.conn, self.cfg, _ = demo_db()
++        # Три тренировки вдвоём пары (1, 2) в июле + одна одиночная тренировка трейнера 1.
++        # По 1001 копейке, чтобы split_evenly давал [501, 500] (лишняя копейка основному).
++        self.conn.executemany(
++            "INSERT INTO sales VALUES (?, ?, ?, ?, ?, ?, ?)",
++            [
++                (101, 1, 1, "2026-07-01", "personal_training", 100000, "own"),  # одиночная
++                (102, 1, 2, "2026-07-02", "personal_training", 1001, "own"),
++                (103, 1, 1, "2026-07-03", "personal_training", 1001, "own"),
++                (104, 1, 2, "2026-07-04", "personal_training", 1001, "own"),
++            ],
++        )
++        self.conn.executemany(
++            "INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?)",
++            [
++                (101, 1, 1, 1, "2026-07-01", 101, None),
++                (102, 1, 1, 2, "2026-07-02", 102, 2),
++                (103, 1, 1, 1, "2026-07-03", 103, 2),
++                (104, 1, 1, 2, "2026-07-04", 104, 2),
++            ],
++        )
++        self.conn.commit()
++
++    def test_main_trainer_gets_solo_plus_alternating_shared(self):
++        report = trainer_monthly_report(self.conn, self.cfg, 1, "2026-07")
++        # 1 одиночная + тренировки вдвоём №1 и №3 (по очереди в паре) = 3
++        self.assertEqual(report["sessions"], 3)
++        # 100000 (solo) + 501 за каждую из 3 тренировок вдвоём (основному — лишняя копейка)
++        self.assertEqual(report["pt_revenue"], to_rubles(100000 + 501 * 3))
++
++    def test_assistant_trainer_gets_remaining_shared_session(self):
++        report = trainer_monthly_report(self.conn, self.cfg, 2, "2026-07")
++        # только тренировка вдвоём №2 (по очереди в паре)
++        self.assertEqual(report["sessions"], 1)
++        self.assertEqual(report["pt_revenue"], to_rubles(500 + 500 + 500))
++
++    def test_shared_sessions_not_duplicated_at_club_level(self):
++        club = club_monthly_report(self.conn, self.cfg, 1, "2026-07")
++        # 4 строки sessions в июле для club_id=1 — ни одна не задвоена
++        self.assertEqual(club["pt_sessions"], 4)
++
++    def test_self_assist_counts_as_solo(self):
++        self.conn.execute(
++            "INSERT INTO sales VALUES (?, ?, ?, ?, ?, ?, ?)",
++            (105, 1, 1, "2026-07-05", "personal_training", 50000, "own"),
++        )
++        self.conn.execute(
++            "INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?)",
++            (105, 1, 1, 1, "2026-07-05", 105, 1),
++        )
++        self.conn.commit()
++        report = trainer_monthly_report(self.conn, self.cfg, 1, "2026-07")
++        self.assertEqual(report["sessions"], 4)
++        self.assertEqual(report["pt_revenue"], to_rubles(100000 + 501 * 3 + 50000))
++
++
+ class NetworkReportTest(unittest.TestCase):
+     def setUp(self):
+         self.conn, self.cfg, _ = demo_db()

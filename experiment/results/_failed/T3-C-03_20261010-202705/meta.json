@@ -1,0 +1,12 @@
+{
+  "run_id": "T3-C-03",
+  "task": "T3",
+  "condition": "C",
+  "repeat": 3,
+  "model": "sonnet",
+  "claude_version": "2.1.280 (Claude Code)",
+  "started_at": "2026-10-10T16:27:01+00:00",
+  "steps": [],
+  "teamlead": [],
+  "infra_error": "You've hit your session limit · resets 11:30pm (<timezone>)"
+}

@@ -1,0 +1,115 @@
+diff --git a/CLAUDE.md b/CLAUDE.md
+index 5d32602..96481e8 100755
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -30,10 +30,10 @@ Requires Python 3.11+ (uses `tomllib`), no external dependencies. `data/` (built
+ 
+ Pipeline: `clients/<slug>.toml` (config) + `raw/<slug>/*.csv` (CRM export) → `fitstat.importer.import_client` → `data/<slug>.db` (SQLite) → `fitstat.reports.*` → JSON.
+ 
+-- **`fitstat/config.py`** — loads `clients/<slug>.toml` into a `ClientConfig`. `partner_channels` lists the client-specific raw channel values that count as `partner` (everything else normalizes to `own`). Per-club settings (e.g. `closed_since`) live under `[clubs.<id>]`.
++- **`fitstat/config.py`** — loads `clients/<slug>.toml` into a `ClientConfig`. `partner_channels` lists the client-specific raw channel values that count as `partner` (everything else normalizes to `own`). Per-club settings (e.g. `closed_since`, `bar_outsourced_since`) live under `[clubs.<id>]`.
+ - **`fitstat/db.py`** — the SQLite schema (`clubs`, `trainers`, `persons`, `visits`, `sales`, `sessions`). Money is stored as integer kopecks (`amount_kop`) everywhere in the DB; conversion to rubles happens only at report output time via `fitstat/money.py`.
+ - **`fitstat/importer.py`** — reads six CSVs per client from `raw/<slug>/`, normalizes `channel` to `own`/`partner` using the client's `partner_channels`, converts amounts to kopecks, and bulk-inserts into a fresh DB (existing DB file is deleted before each import — not incremental).
+-- **`fitstat/reports.py`** — the public interface: `club_monthly_report`, `trainer_monthly_report`, `network_monthly_report`. **Their signatures must not change** — client data exports depend on them. `network_monthly_report` sums per-club reports but excludes clubs whose `closed_since` (from the client config) is on/before the report month's start. Month strings are `YYYY-MM`; `_month_bounds` converts them to a half-open `[start, end)` date range used in all date comparisons.
++- **`fitstat/reports.py`** — the public interface: `club_monthly_report`, `trainer_monthly_report`, `network_monthly_report`. **Their signatures must not change** — client data exports depend on them. `network_monthly_report` sums per-club reports but excludes clubs whose `closed_since` (from the client config) is on/before the report month's start. A club whose `bar_outsourced_since` is on/before the report month's start has its `kind = 'bar'` sales excluded from both `revenue` and `revenue_own` (the bar is run by a third-party operator and its sales are no longer the club's revenue). Month strings are `YYYY-MM`; `_month_bounds` converts them to a half-open `[start, end)` date range used in all date comparisons.
+ - **`fitstat/money.py`** — kopeck arithmetic. `to_kopecks`/`to_rubles` convert at the system boundary; `split_evenly` distributes a kopeck total across N parts without losing remainder kopecks (extra kopecks go to the first parts).
+ - **`fitstat/cli.py`** — argparse entry point (`import` / `report` subcommands), wired via `fitstat/__main__.py`.
+ 
+diff --git a/clients/alpha.toml b/clients/alpha.toml
+index 2bd84f9..0e5e991 100755
+--- a/clients/alpha.toml
++++ b/clients/alpha.toml
+@@ -7,3 +7,7 @@ partner_channels = ["sportpass", "fitmost"]
+ [clubs.3]
+ # Клуб закрыт, в итоги сети не включаем
+ closed_since = "2026-04-01"
++
++[clubs.7]
++# Бар сдан в аренду стороннему оператору, его продажи больше не выручка клуба
++bar_outsourced_since = "2026-05-01"
+diff --git a/fitstat/reports.py b/fitstat/reports.py
+index 56b08ef..021a7b8 100755
+--- a/fitstat/reports.py
++++ b/fitstat/reports.py
+@@ -25,15 +25,20 @@ def club_monthly_report(conn: sqlite3.Connection, cfg: ClientConfig, club_id: in
+     start, end = _month_bounds(month)
+     period = (club_id, start, end)
+ 
++    # Клубы, где бар сдан стороннему оператору (bar_outsourced_since в конфиге),
++    # больше не получают долю с продаж бара — исключаем их из выручки клуба.
++    bar_outsourced_since = cfg.club(club_id).get("bar_outsourced_since")
++    bar_filter = " AND kind != 'bar'" if bar_outsourced_since and bar_outsourced_since <= start else ""
++
+     revenue = _scalar(
+         conn,
+-        "SELECT SUM(amount_kop) FROM sales WHERE club_id = ? AND sale_date >= ? AND sale_date < ?",
++        f"SELECT SUM(amount_kop) FROM sales WHERE club_id = ? AND sale_date >= ? AND sale_date < ?{bar_filter}",
+         period,
+     )
+     revenue_own = _scalar(
+         conn,
+         "SELECT SUM(amount_kop) FROM sales"
+-        " WHERE club_id = ? AND sale_date >= ? AND sale_date < ? AND channel = 'own'",
++        f" WHERE club_id = ? AND sale_date >= ? AND sale_date < ? AND channel = 'own'{bar_filter}",
+         period,
+     )
+     visits = _scalar(
+diff --git a/tests/fixtures/clients/demo.toml b/tests/fixtures/clients/demo.toml
+index d1461fb..d23a82f 100755
+--- a/tests/fixtures/clients/demo.toml
++++ b/tests/fixtures/clients/demo.toml
+@@ -3,5 +3,8 @@ name = "Демо"
+ [import]
+ partner_channels = ["partnerx"]
+ 
++[clubs.1]
++bar_outsourced_since = "2026-06-01"
++
+ [clubs.2]
+ closed_since = "2026-05-01"
+diff --git a/tests/fixtures/raw/demo/sales.csv b/tests/fixtures/raw/demo/sales.csv
+index f6c846f..54a8cc1 100755
+--- a/tests/fixtures/raw/demo/sales.csv
++++ b/tests/fixtures/raw/demo/sales.csv
+@@ -6,3 +6,5 @@ id,club_id,person_id,sale_date,kind,amount,channel
+ 5,2,4,2026-05-08,personal_training,2500.00,partnerx
+ 6,1,3,2026-05-10,membership,3000.00,own
+ 7,1,,2026-04-15,bar,100.00,own
++8,1,1,2026-06-03,membership,1000.00,own
++9,1,,2026-06-04,bar,300.00,own
+diff --git a/tests/test_importer.py b/tests/test_importer.py
+index aae97d2..057680e 100755
+--- a/tests/test_importer.py
++++ b/tests/test_importer.py
+@@ -11,7 +11,7 @@ class ImporterTest(unittest.TestCase):
+     def test_row_counts(self):
+         self.assertEqual(
+             self.counts,
+-            {"clubs": 2, "trainers": 3, "persons": 4, "visits": 6, "sales": 7, "sessions": 2},
++            {"clubs": 2, "trainers": 3, "persons": 4, "visits": 6, "sales": 9, "sessions": 2},
+         )
+ 
+     def test_partner_channel_is_normalized(self):
+diff --git a/tests/test_reports.py b/tests/test_reports.py
+index ad002b9..66f24de 100755
+--- a/tests/test_reports.py
++++ b/tests/test_reports.py
+@@ -22,6 +22,18 @@ class ClubReportTest(unittest.TestCase):
+         self.assertEqual(report["revenue"], 0.0)
+         self.assertEqual(report["visits"], 0)
+ 
++    def test_bar_outsourced_excluded_from_revenue(self):
++        # club 1: bar_outsourced_since = 2026-06-01; June sales are membership 1000 + bar 300
++        report = club_monthly_report(self.conn, self.cfg, 1, "2026-06")
++        self.assertEqual(report["revenue"], 1000.0)
++        self.assertEqual(report["revenue_own"], 1000.0)
++
++    def test_bar_still_included_before_outsourcing(self):
++        # May is before bar_outsourced_since, so the bar sale still counts
++        report = club_monthly_report(self.conn, self.cfg, 1, "2026-05")
++        self.assertEqual(report["revenue"], 11750.5)
++        self.assertEqual(report["revenue_own"], 8250.0)
++
+ 
+ class TrainerReportTest(unittest.TestCase):
+     def setUp(self):

@@ -1,0 +1,13 @@
+{
+  "task": "T1",
+  "checks": {
+    "alpha_c7_bar_excluded": true,
+    "alpha_c7_before_may_unchanged": true,
+    "beta_c7_unchanged": true,
+    "nothing_else_changed": true,
+    "config_driven": true,
+    "project_tests_pass": true
+  },
+  "info": {},
+  "errors": []
+}

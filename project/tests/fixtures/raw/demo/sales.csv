@@ -1,0 +1,8 @@
+id,club_id,person_id,sale_date,kind,amount,channel
+1,1,1,2026-05-01,membership,3000.00,own
+2,1,2,2026-05-05,membership,3500.50,partnerx
+3,1,,2026-05-06,bar,250.00,own
+4,1,1,2026-05-07,personal_training,2000.00,own
+5,2,4,2026-05-08,personal_training,2500.00,partnerx
+6,1,3,2026-05-10,membership,3000.00,own
+7,1,,2026-04-15,bar,100.00,own

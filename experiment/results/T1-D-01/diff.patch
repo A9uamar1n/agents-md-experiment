@@ -1,0 +1,88 @@
+diff --git a/clients/alpha.toml b/clients/alpha.toml
+index 2bd84f9..230c647 100755
+--- a/clients/alpha.toml
++++ b/clients/alpha.toml
+@@ -7,3 +7,7 @@ partner_channels = ["sportpass", "fitmost"]
+ [clubs.3]
+ # Клуб закрыт, в итоги сети не включаем
+ closed_since = "2026-04-01"
++
++[clubs.7]
++# Бар сдан в аренду стороннему оператору, его продажи больше не входят в выручку клуба
++bar_outsourced_since = "2026-05-01"
+diff --git a/fitstat/reports.py b/fitstat/reports.py
+index 56b08ef..e6c127b 100755
+--- a/fitstat/reports.py
++++ b/fitstat/reports.py
+@@ -25,15 +25,21 @@ def club_monthly_report(conn: sqlite3.Connection, cfg: ClientConfig, club_id: in
+     start, end = _month_bounds(month)
+     period = (club_id, start, end)
+ 
++    # bar_outsourced_since (конфиг клуба): с этой даты бар сдан стороннему оператору,
++    # его продажи больше не относятся к выручке клуба.
++    bar_outsourced_since = cfg.club(club_id).get("bar_outsourced_since")
++    exclude_bar = bool(bar_outsourced_since) and start >= bar_outsourced_since
++    bar_filter = " AND kind != 'bar'" if exclude_bar else ""
++
+     revenue = _scalar(
+         conn,
+-        "SELECT SUM(amount_kop) FROM sales WHERE club_id = ? AND sale_date >= ? AND sale_date < ?",
++        "SELECT SUM(amount_kop) FROM sales WHERE club_id = ? AND sale_date >= ? AND sale_date < ?" + bar_filter,
+         period,
+     )
+     revenue_own = _scalar(
+         conn,
+         "SELECT SUM(amount_kop) FROM sales"
+-        " WHERE club_id = ? AND sale_date >= ? AND sale_date < ? AND channel = 'own'",
++        " WHERE club_id = ? AND sale_date >= ? AND sale_date < ? AND channel = 'own'" + bar_filter,
+         period,
+     )
+     visits = _scalar(
+diff --git a/tests/fixtures/clients/demo.toml b/tests/fixtures/clients/demo.toml
+index d1461fb..aeb6cfd 100755
+--- a/tests/fixtures/clients/demo.toml
++++ b/tests/fixtures/clients/demo.toml
+@@ -5,3 +5,6 @@ partner_channels = ["partnerx"]
+ 
+ [clubs.2]
+ closed_since = "2026-05-01"
++
++[clubs.1]
++bar_outsourced_since = "2026-05-01"
+diff --git a/tests/test_reports.py b/tests/test_reports.py
+index ad002b9..848bca1 100755
+--- a/tests/test_reports.py
++++ b/tests/test_reports.py
+@@ -9,14 +9,21 @@ class ClubReportTest(unittest.TestCase):
+         self.conn, self.cfg, _ = demo_db()
+ 
+     def test_club_may(self):
++        # club 1: бар сдан в аренду с 2026-05-01, его продажа (250.00, own) исключена из выручки
+         report = club_monthly_report(self.conn, self.cfg, 1, "2026-05")
+-        self.assertEqual(report["revenue"], 11750.5)
+-        self.assertEqual(report["revenue_own"], 8250.0)
++        self.assertEqual(report["revenue"], 11500.5)
++        self.assertEqual(report["revenue_own"], 8000.0)
+         self.assertEqual(report["visits"], 4)
+         self.assertEqual(report["active_members"], 2)
+         self.assertEqual(report["pt_sessions"], 1)
+         self.assertEqual(report["pt_revenue"], 2000.0)
+ 
++    def test_club_april_bar_still_included(self):
++        # до даты bar_outsourced_since продажа бара (100.00, own) ещё учитывается в выручке
++        report = club_monthly_report(self.conn, self.cfg, 1, "2026-04")
++        self.assertEqual(report["revenue"], 100.0)
++        self.assertEqual(report["revenue_own"], 100.0)
++
+     def test_empty_month(self):
+         report = club_monthly_report(self.conn, self.cfg, 2, "2026-03")
+         self.assertEqual(report["revenue"], 0.0)
+@@ -45,7 +52,7 @@ class NetworkReportTest(unittest.TestCase):
+     def test_closed_club_excluded(self):
+         report = network_monthly_report(self.conn, self.cfg, "2026-05")
+         self.assertEqual(report["clubs_count"], 1)
+-        self.assertEqual(report["revenue"], 11750.5)
++        self.assertEqual(report["revenue"], 11500.5)
+         self.assertEqual(report["visits"], 4)
+ 
+     def test_club_open_before_closing(self):

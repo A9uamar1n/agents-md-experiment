@@ -1,0 +1,123 @@
+diff --git a/clients/alpha.toml b/clients/alpha.toml
+index 2bd84f9..fbaac72 100755
+--- a/clients/alpha.toml
++++ b/clients/alpha.toml
+@@ -7,3 +7,7 @@ partner_channels = ["sportpass", "fitmost"]
+ [clubs.3]
+ # Клуб закрыт, в итоги сети не включаем
+ closed_since = "2026-04-01"
++
++[clubs.7.excluded_sale_kinds]
++# Бар сдан в аренду стороннему оператору с мая 2026 — его продажи больше не выручка клуба
++bar = "2026-05-01"
+diff --git a/docs/metrics.md b/docs/metrics.md
+index fa00a33..990fbef 100755
+--- a/docs/metrics.md
++++ b/docs/metrics.md
+@@ -9,6 +9,8 @@
+ ## Выручка — `revenue`
+ Сумма всех продаж клуба за месяц: абонементы, персональные тренировки, бар. Все каналы продаж.
+ 
++Если в конфиге клиента для клуба задано исключение вида продаж с определённой даты (например, направление передано стороннему оператору), продажи этого вида, начиная с указанной даты включительно, в выручку клуба не входят. Правило бессрочное, пока в конфиге не указано иное, и относится только к клубу, для которого оно задано.
++
+ ## Собственная выручка — `revenue_own`
+ То же, что `revenue`, но только продажи через собственный канал клуба, без партнёров-агрегаторов.
+ 
+diff --git a/fitstat/reports.py b/fitstat/reports.py
+index 56b08ef..d99ff06 100755
+--- a/fitstat/reports.py
++++ b/fitstat/reports.py
+@@ -21,20 +21,33 @@ def _scalar(conn: sqlite3.Connection, sql: str, params: tuple) -> int:
+     return conn.execute(sql, params).fetchone()[0] or 0
+ 
+ 
++def _exclude_sale_kinds_clause(cfg: ClientConfig, club_id: int) -> tuple[str, list]:
++    """Клуб может исключать из выручки отдельные виды продаж с определённой даты
++    (`[clubs.<id>.excluded_sale_kinds]` в конфиге клиента, вид -> дата начала)."""
++    excluded = cfg.club(club_id).get("excluded_sale_kinds", {})
++    clause = ""
++    params: list = []
++    for kind, since in excluded.items():
++        clause += " AND NOT (kind = ? AND sale_date >= ?)"
++        params.extend([kind, since])
++    return clause, params
++
++
+ def club_monthly_report(conn: sqlite3.Connection, cfg: ClientConfig, club_id: int, month: str) -> dict:
+     start, end = _month_bounds(month)
+     period = (club_id, start, end)
++    exclude_clause, exclude_params = _exclude_sale_kinds_clause(cfg, club_id)
+ 
+     revenue = _scalar(
+         conn,
+-        "SELECT SUM(amount_kop) FROM sales WHERE club_id = ? AND sale_date >= ? AND sale_date < ?",
+-        period,
++        "SELECT SUM(amount_kop) FROM sales WHERE club_id = ? AND sale_date >= ? AND sale_date < ?" + exclude_clause,
++        period + tuple(exclude_params),
+     )
+     revenue_own = _scalar(
+         conn,
+         "SELECT SUM(amount_kop) FROM sales"
+-        " WHERE club_id = ? AND sale_date >= ? AND sale_date < ? AND channel = 'own'",
+-        period,
++        " WHERE club_id = ? AND sale_date >= ? AND sale_date < ? AND channel = 'own'" + exclude_clause,
++        period + tuple(exclude_params),
+     )
+     visits = _scalar(
+         conn,
+diff --git a/tests/fixtures/clients/demo.toml b/tests/fixtures/clients/demo.toml
+index d1461fb..343122a 100755
+--- a/tests/fixtures/clients/demo.toml
++++ b/tests/fixtures/clients/demo.toml
+@@ -5,3 +5,6 @@ partner_channels = ["partnerx"]
+ 
+ [clubs.2]
+ closed_since = "2026-05-01"
++
++[clubs.1.excluded_sale_kinds]
++bar = "2026-05-01"
+diff --git a/tests/test_reports.py b/tests/test_reports.py
+index ad002b9..936a5a2 100755
+--- a/tests/test_reports.py
++++ b/tests/test_reports.py
+@@ -10,8 +10,8 @@ class ClubReportTest(unittest.TestCase):
+ 
+     def test_club_may(self):
+         report = club_monthly_report(self.conn, self.cfg, 1, "2026-05")
+-        self.assertEqual(report["revenue"], 11750.5)
+-        self.assertEqual(report["revenue_own"], 8250.0)
++        self.assertEqual(report["revenue"], 11500.5)
++        self.assertEqual(report["revenue_own"], 8000.0)
+         self.assertEqual(report["visits"], 4)
+         self.assertEqual(report["active_members"], 2)
+         self.assertEqual(report["pt_sessions"], 1)
+@@ -22,6 +22,20 @@ class ClubReportTest(unittest.TestCase):
+         self.assertEqual(report["revenue"], 0.0)
+         self.assertEqual(report["visits"], 0)
+ 
++    def test_excluded_sale_kind_applies_from_cutoff_date(self):
++        # club 1 excludes 'bar' sales from 2026-05-01 (clients/demo.toml); April sale before
++        # the cutoff must still count, the May sale on/after it must not.
++        april = club_monthly_report(self.conn, self.cfg, 1, "2026-04")
++        self.assertEqual(april["revenue"], 100.0)
++
++        may = club_monthly_report(self.conn, self.cfg, 1, "2026-05")
++        self.assertEqual(may["revenue"], 11500.5)
++
++    def test_excluded_sale_kind_is_per_club(self):
++        # club 2 has no exclusion configured, so its sales are unaffected.
++        report = club_monthly_report(self.conn, self.cfg, 2, "2026-05")
++        self.assertEqual(report["revenue"], 2500.0)
++
+ 
+ class TrainerReportTest(unittest.TestCase):
+     def setUp(self):
+@@ -45,7 +59,7 @@ class NetworkReportTest(unittest.TestCase):
+     def test_closed_club_excluded(self):
+         report = network_monthly_report(self.conn, self.cfg, "2026-05")
+         self.assertEqual(report["clubs_count"], 1)
+-        self.assertEqual(report["revenue"], 11750.5)
++        self.assertEqual(report["revenue"], 11500.5)
+         self.assertEqual(report["visits"], 4)
+ 
+     def test_club_open_before_closing(self):

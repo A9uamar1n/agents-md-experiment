@@ -1,0 +1,234 @@
+{
+  "run_id": "T1-D-02",
+  "task": "T1",
+  "condition": "D",
+  "repeat": 2,
+  "model": "sonnet",
+  "claude_version": "2.1.280 (Claude Code)",
+  "started_at": "2026-10-10T15:40:26+00:00",
+  "steps": [
+    {
+      "returncode": 0,
+      "tool_uses": [
+        {
+          "tool": "Read",
+          "target": "docs/metrics.md"
+        },
+        {
+          "tool": "Read",
+          "target": "fitstat/reports.py"
+        },
+        {
+          "tool": "Read",
+          "target": "fitstat/config.py"
+        },
+        {
+          "tool": "Read",
+          "target": "fitstat/db.py"
+        },
+        {
+          "tool": "Read",
+          "target": "fitstat/importer.py"
+        },
+        {
+          "tool": "Glob",
+          "target": "clients/alpha.toml"
+        },
+        {
+          "tool": "Read",
+          "target": "clients/alpha.toml"
+        },
+        {
+          "tool": "Read",
+          "target": "tests/test_reports.py"
+        },
+        {
+          "tool": "Read",
+          "target": "tests/helpers.py"
+        },
+        {
+          "tool": "Grep",
+          "target": "closed_since"
+        },
+        {
+          "tool": "Read",
+          "target": "tests/fixtures/clients/demo.toml"
+        },
+        {
+          "tool": "Read",
+          "target": "tests/fixtures/raw/demo/sales.csv"
+        },
+        {
+          "tool": "Read",
+          "target": "tests/test_importer.py"
+        },
+        {
+          "tool": "Edit",
+          "target": "clients/alpha.toml"
+        },
+        {
+          "tool": "Edit",
+          "target": "fitstat/reports.py"
+        },
+        {
+          "tool": "Read",
+          "target": "fitstat/reports.py"
+        },
+        {
+          "tool": "Edit",
+          "target": "CLAUDE.md"
+        },
+        {
+          "tool": "Edit",
+          "target": "CLAUDE.md"
+        },
+        {
+          "tool": "Read",
+          "target": "tests/fixtures/raw/demo/visits.csv"
+        },
+        {
+          "tool": "Read",
+          "target": "tests/fixtures/raw/demo/sessions.csv"
+        },
+        {
+          "tool": "Read",
+          "target": "tests/fixtures/raw/demo/clubs.csv"
+        },
+        {
+          "tool": "Edit",
+          "target": "tests/fixtures/raw/demo/sales.csv"
+        },
+        {
+          "tool": "Edit",
+          "target": "tests/fixtures/clients/demo.toml"
+        },
+        {
+          "tool": "Edit",
+          "target": "tests/test_importer.py"
+        },
+        {
+          "tool": "Edit",
+          "target": "tests/test_reports.py"
+        },
+        {
+          "tool": "Bash",
+          "target": "python -m unittest discover -s tests -v 2>&1 | tail -40"
+        },
+        {
+          "tool": "Bash",
+          "target": "python3 -m unittest discover -s tests -v 2>&1 | tail -40"
+        },
+        {
+          "tool": "Bash",
+          "target": "ls raw/ 2>&1; ls raw/alpha 2>&1"
+        },
+        {
+          "tool": "Bash",
+          "target": "python3 -m fitstat import alpha && python3 -m fitstat report alpha --club 7 --month 2026-04 && echo \"---\" && python3 -m fitstat report alpha --club 7 --month 2026-05"
+        },
+        {
+          "tool": "Bash",
+          "target": "python3 -c \"\nfrom fitstat.db import connect\nconn = connect('data/alpha.db')\nr = conn.execute(\\\"SELECT SUM(amount_kop) FROM sales WHERE club_id=7 AND kind='bar' AND sale_date>='2026-05-01' AND sale_date<'2026-06-01'\\\").fetchone()[0]\nprint('bar sales may (kop):', r)\nr2 = conn.execute(\\\"SELECT SUM(amou"
+        },
+        {
+          "tool": "Bash",
+          "target": "git status"
+        }
+      ],
+      "result": {
+        "session_id": "73bee3c1-4c26-414d-8127-2fab5eeb1a3e",
+        "is_error": false,
+        "subtype": "success",
+        "num_turns": 32,
+        "duration_ms": 131451,
+        "total_cost_usd": 0.389358,
+        "result": "`data/alpha.db` is gitignored (confirmed not shown in status), so nothing to clean up. Changes are only in tracked files.\n\n## Итог\n\nДобавил в конфиг клиента per-club параметр `bar_outsourced_since` (по аналогии с существующим `closed_since`) и указал для клуба 7 Альфы значение `\"2026-05-01\"` (`clients/alpha.toml`).\n\nВ `club_monthly_report` (`fitstat/reports.py`) добавил условие: если у клуба задан `bar_outsourced_since` и он ≤ начала отчётного месяца, из SQL-запросов для `revenue` и `revenue_own` исключаются продажи с `kind = 'bar'`. Остальные метрики (`visits`, `active_members`, `pt_sessions`, `pt_revenue`) не трогал — они бар не учитывают. `network_monthly_report` получает исключение бесплатно, так как суммирует результаты `club_monthly_report`.\n\nРешения:\n- Исключил бар из **обоих** `revenue` и `revenue_own` — раз это больше не доход клуба ни по какому каналу, нет смысла оставлять его в «собственной» выручке.\n- Использовал тот же паттерн сравнения дат (`<=` start месяца), что и у `closed_since`, для единообразия и предсказуемости границы (действует начиная с месяца, равного или позже даты).\n- Обновил `CLAUDE.md`, чтобы архитектурное описание осталось точным для последующей работы.\n- Расширил фикстуру `demo` (новый `bar_outsourced_since` для клуба 1 с июня 2026, две новые тестовые продажи) и добавил тесты, проверяющие и исключение с нужного месяца, и что более ранние месяцы не затронуты. Обновил ожидаемое число продаж в `test_importer.py`.\n\nВсе 14 тестов проходят; на реальных данных Альфы проверил вручную — в мае бар-продажи клуба 7 (14 356,50 ₽) корректно исключены из `revenue`, а апрельский отчёт не изменился.",
+        "usage": {
+          "input_tokens": 42,
+          "cache_creation_input_tokens": 28389,
+          "cache_read_input_tokens": 835090,
+          "output_tokens": 10870,
+          "output_tokens_details": {
+            "thinking_tokens": 4696
+          },
+          "server_tool_use": {
+            "web_search_requests": 0,
+            "web_fetch_requests": 0
+          },
+          "service_tier": "standard",
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 28389,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "inference_geo": "global",
+          "iterations": [
+            {
+              "input_tokens": 2,
+              "output_tokens": 720,
+              "cache_read_input_tokens": 47649,
+              "cache_creation_input_tokens": 613,
+              "cache_creation": {
+                "ephemeral_5m_input_tokens": 0,
+                "ephemeral_1h_input_tokens": 613
+              },
+              "type": "message"
+            }
+          ],
+          "speed": "standard"
+        },
+        "modelUsage": {
+          "claude-sonnet-5": {
+            "inputTokens": 42,
+            "outputTokens": 10870,
+            "cacheReadInputTokens": 835090,
+            "cacheCreationInputTokens": 28389,
+            "webSearchRequests": 0,
+            "costUSD": 0.389358,
+            "contextWindow": 1000000,
+            "maxOutputTokens": 64000,
+            "thinkingTokens": 4696,
+            "canonicalModel": "claude-sonnet-5",
+            "provider": "firstParty",
+            "costBasis": "list"
+          }
+        }
+      },
+      "init": {
+        "model": "claude-sonnet-5",
+        "claude_code_version": "2.1.280",
+        "tools": [
+          "Task",
+          "Bash",
+          "CronCreate",
+          "CronDelete",
+          "CronList",
+          "DesignSync",
+          "Edit",
+          "EnterWorktree",
+          "ExitWorktree",
+          "Glob",
+          "Grep",
+          "ListAgents",
+          "Monitor",
+          "NotebookEdit",
+          "PushNotification",
+          "Read",
+          "RemoteTrigger",
+          "ReportFindings",
+          "ScheduleWakeup",
+          "SendMessage",
+          "Skill",
+          "TaskStop",
+          "ToolSearch",
+          "WebFetch",
+          "WebSearch",
+          "Write"
+        ],
+        "permissionMode": "acceptEdits"
+      }
+    }
+  ],
+  "teamlead": [],
+  "finished_at": "2026-10-10T15:42:52+00:00",
+  "total_cost_usd": 0.3894
+}

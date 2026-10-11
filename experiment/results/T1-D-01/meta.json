@@ -1,0 +1,202 @@
+{
+  "run_id": "T1-D-01",
+  "task": "T1",
+  "condition": "D",
+  "repeat": 1,
+  "model": "sonnet",
+  "claude_version": "2.1.280 (Claude Code)",
+  "started_at": "2026-10-10T14:57:41+00:00",
+  "steps": [
+    {
+      "returncode": 0,
+      "tool_uses": [
+        {
+          "tool": "Read",
+          "target": "fitstat/reports.py"
+        },
+        {
+          "tool": "Read",
+          "target": "fitstat/config.py"
+        },
+        {
+          "tool": "Read",
+          "target": "fitstat/db.py"
+        },
+        {
+          "tool": "Read",
+          "target": "docs/metrics.md"
+        },
+        {
+          "tool": "Bash",
+          "target": "find /tmp/fitstat-runs/T1-D-01/repo/clients -type f | xargs -I{} echo {}; echo ---; cat /tmp/fitstat-runs/T1-D-01/repo/clients/alpha.toml 2>/dev/null"
+        },
+        {
+          "tool": "Glob",
+          "target": "clients/*.toml"
+        },
+        {
+          "tool": "Read",
+          "target": "clients/alpha.toml"
+        },
+        {
+          "tool": "Read",
+          "target": "clients/beta.toml"
+        },
+        {
+          "tool": "Read",
+          "target": "tests/fixtures/clients/demo.toml"
+        },
+        {
+          "tool": "Bash",
+          "target": "ls /tmp/fitstat-runs/T1-D-01/repo/tests/fixtures/raw/demo/ 2>/dev/null; echo ---; cat /tmp/fitstat-runs/T1-D-01/repo/tests/fixtures/raw/demo/sales.csv 2>/dev/null"
+        },
+        {
+          "tool": "Read",
+          "target": "tests/test_reports.py"
+        },
+        {
+          "tool": "Bash",
+          "target": "cd /tmp/fitstat-runs/T1-D-01/repo/tests/fixtures/raw/demo && echo \"--clubs--\"; cat clubs.csv; echo \"--sales--\"; cat sales.csv; echo \"--visits--\"; cat visits.csv"
+        },
+        {
+          "tool": "Read",
+          "target": "tests/test_importer.py"
+        },
+        {
+          "tool": "Edit",
+          "target": "fitstat/reports.py"
+        },
+        {
+          "tool": "Edit",
+          "target": "clients/alpha.toml"
+        },
+        {
+          "tool": "Edit",
+          "target": "tests/fixtures/clients/demo.toml"
+        },
+        {
+          "tool": "Edit",
+          "target": "tests/test_reports.py"
+        },
+        {
+          "tool": "Edit",
+          "target": "tests/test_reports.py"
+        },
+        {
+          "tool": "Bash",
+          "target": "cd /tmp/fitstat-runs/T1-D-01/repo && python -m unittest discover -s tests 2>&1"
+        },
+        {
+          "tool": "Bash",
+          "target": "cd /tmp/fitstat-runs/T1-D-01/repo && python3 -m unittest discover -s tests 2>&1"
+        },
+        {
+          "tool": "Bash",
+          "target": "git diff"
+        }
+      ],
+      "result": {
+        "session_id": "0f5532c4-7c7a-43ec-bbbb-ddf5873339c0",
+        "is_error": false,
+        "subtype": "success",
+        "num_turns": 22,
+        "duration_ms": 121715,
+        "total_cost_usd": 0.33757,
+        "result": "Готово. Что сделал:\n\n1. **`fitstat/reports.py`** — в `club_monthly_report` добавил проверку per-club настройки `bar_outsourced_since` из конфига клиента: если задана и месяц отчёта `>=` этой даты, продажи с `kind = 'bar'` исключаются и из `revenue`, и из `revenue_own`. Сигнатура функции не менялась.\n\n2. **`clients/alpha.toml`** — добавил `[clubs.7] bar_outsourced_since = \"2026-05-01\"` по аналогии с уже существующим паттерном `closed_since` для клуба 3 (per-club секция в конфиге клиента).\n\n3. **Тесты** — обновил фикстуру `tests/fixtures/clients/demo.toml` (клуб 1 получил `bar_outsourced_since = \"2026-05-01\"`, в фикстуре уже была продажа бара за май и за апрель для этого клуба). Пересчитал ожидаемые значения в `tests/test_reports.py` для мая (продажа бара 250₽ теперь исключена из `revenue` и `revenue_own`) и добавил тест на апрель, подтверждающий, что до даты отсечения продажа бара (100₽) всё ещё учитывается. Все 13 тестов проходят.\n\nРешения:\n- Исключил бар также из `revenue_own`, а не только из `revenue` — иначе при bar-продаже с channel='own' возникло бы нарушение инварианта `revenue_own ≤ revenue`.\n- Сравнение дат — строковое (`start >= bar_outsourced_since`), как и для `closed_since` в сетевом отчёте — то есть исключение действует начиная с отчёта за май 2026 включительно.\n- Не трогал `docs/metrics.md`, так как это общесистемный справочник метрик, а исключение специфично для клиента Альфа/клуба 7 — по аналогии с `closed_since`, такие вещи документируются комментарием в `clients/<slug>.toml`, а не в общем справочнике.",
+        "usage": {
+          "input_tokens": 36,
+          "cache_creation_input_tokens": 26226,
+          "cache_read_input_tokens": 646220,
+          "output_tokens": 10335,
+          "output_tokens_details": {
+            "thinking_tokens": 5516
+          },
+          "server_tool_use": {
+            "web_search_requests": 0,
+            "web_fetch_requests": 0
+          },
+          "service_tier": "standard",
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 26226,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "inference_geo": "global",
+          "iterations": [
+            {
+              "input_tokens": 2,
+              "output_tokens": 698,
+              "cache_read_input_tokens": 44108,
+              "cache_creation_input_tokens": 1991,
+              "cache_creation": {
+                "ephemeral_5m_input_tokens": 0,
+                "ephemeral_1h_input_tokens": 1991
+              },
+              "type": "message"
+            }
+          ],
+          "speed": "standard"
+        },
+        "modelUsage": {
+          "claude-sonnet-5": {
+            "inputTokens": 36,
+            "outputTokens": 10335,
+            "cacheReadInputTokens": 646220,
+            "cacheCreationInputTokens": 26226,
+            "webSearchRequests": 0,
+            "costUSD": 0.33757,
+            "contextWindow": 1000000,
+            "maxOutputTokens": 64000,
+            "thinkingTokens": 5516,
+            "canonicalModel": "claude-sonnet-5",
+            "provider": "firstParty",
+            "costBasis": "list"
+          }
+        }
+      },
+      "init": {
+        "model": "claude-sonnet-5",
+        "claude_code_version": "2.1.280",
+        "tools": [
+          "Task",
+          "Bash",
+          "CronCreate",
+          "CronDelete",
+          "CronList",
+          "DesignSync",
+          "Edit",
+          "EnterWorktree",
+          "ExitWorktree",
+          "Glob",
+          "Grep",
+          "ListAgents",
+          "Monitor",
+          "NotebookEdit",
+          "PushNotification",
+          "Read",
+          "RemoteTrigger",
+          "ReportFindings",
+          "ScheduleWakeup",
+          "SendMessage",
+          "Skill",
+          "TaskStop",
+          "ToolSearch",
+          "WebFetch",
+          "WebSearch",
+          "Write",
+          "mcp__claude_ai_Claude_Docs__batch",
+          "mcp__claude_ai_Claude_Docs__create",
+          "mcp__claude_ai_Claude_Docs__delete",
+          "mcp__claude_ai_Claude_Docs__export",
+          "mcp__claude_ai_Claude_Docs__guide",
+          "mcp__claude_ai_Claude_Docs__query",
+          "mcp__claude_ai_Claude_Docs__read",
+          "mcp__claude_ai_Claude_Docs__update"
+        ],
+        "permissionMode": "acceptEdits"
+      }
+    }
+  ],
+  "teamlead": [],
+  "finished_at": "2026-10-10T14:59:57+00:00",
+  "total_cost_usd": 0.3376
+}

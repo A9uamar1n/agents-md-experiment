@@ -1,0 +1,7 @@
+name = "Демо"
+
+[import]
+partner_channels = ["partnerx"]
+
+[clubs.2]
+closed_since = "2026-05-01"

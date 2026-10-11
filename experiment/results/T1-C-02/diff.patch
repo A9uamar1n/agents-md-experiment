@@ -1,0 +1,94 @@
+diff --git a/clients/alpha.toml b/clients/alpha.toml
+index 2bd84f9..3a5f64f 100755
+--- a/clients/alpha.toml
++++ b/clients/alpha.toml
+@@ -7,3 +7,7 @@ partner_channels = ["sportpass", "fitmost"]
+ [clubs.3]
+ # Клуб закрыт, в итоги сети не включаем
+ closed_since = "2026-04-01"
++
++[clubs.7]
++# С мая 2026 бар сдан в аренду стороннему оператору, его продажи не входят в выручку клуба
++bar_outsourced_since = "2026-05-01"
+diff --git a/fitstat/reports.py b/fitstat/reports.py
+index 56b08ef..1c4c48c 100755
+--- a/fitstat/reports.py
++++ b/fitstat/reports.py
+@@ -25,15 +25,19 @@ def club_monthly_report(conn: sqlite3.Connection, cfg: ClientConfig, club_id: in
+     start, end = _month_bounds(month)
+     period = (club_id, start, end)
+ 
++    bar_outsourced_since = cfg.club(club_id).get("bar_outsourced_since")
++    exclude_bar = bool(bar_outsourced_since) and bar_outsourced_since <= start
++    exclude_bar_sql = " AND kind != 'bar'" if exclude_bar else ""
++
+     revenue = _scalar(
+         conn,
+-        "SELECT SUM(amount_kop) FROM sales WHERE club_id = ? AND sale_date >= ? AND sale_date < ?",
++        "SELECT SUM(amount_kop) FROM sales WHERE club_id = ? AND sale_date >= ? AND sale_date < ?" + exclude_bar_sql,
+         period,
+     )
+     revenue_own = _scalar(
+         conn,
+         "SELECT SUM(amount_kop) FROM sales"
+-        " WHERE club_id = ? AND sale_date >= ? AND sale_date < ? AND channel = 'own'",
++        " WHERE club_id = ? AND sale_date >= ? AND sale_date < ? AND channel = 'own'" + exclude_bar_sql,
+         period,
+     )
+     visits = _scalar(
+diff --git a/tests/test_reports.py b/tests/test_reports.py
+index ad002b9..bbf026a 100755
+--- a/tests/test_reports.py
++++ b/tests/test_reports.py
+@@ -1,5 +1,7 @@
+ import unittest
+ 
++from fitstat.config import ClientConfig
++from fitstat.db import connect, create_schema
+ from fitstat.reports import club_monthly_report, network_monthly_report, trainer_monthly_report
+ from tests.helpers import demo_db
+ 
+@@ -38,6 +40,43 @@ class TrainerReportTest(unittest.TestCase):
+         self.assertEqual(report["pt_revenue"], 0.0)
+ 
+ 
++class BarOutsourcedTest(unittest.TestCase):
++    def setUp(self):
++        self.conn = connect()
++        create_schema(self.conn)
++        self.conn.executemany(
++            "INSERT INTO sales (id, club_id, person_id, sale_date, kind, amount_kop, channel)"
++            " VALUES (?, ?, ?, ?, ?, ?, ?)",
++            [
++                (1, 7, None, "2026-04-20", "bar", 10000, "own"),
++                (2, 7, None, "2026-05-05", "bar", 20000, "own"),
++                (3, 7, 1, "2026-05-06", "membership", 30000, "own"),
++            ],
++        )
++        self.conn.commit()
++        self.cfg = ClientConfig(
++            slug="test", name="Тест", partner_channels=[], clubs={7: {"bar_outsourced_since": "2026-05-01"}}
++        )
++
++    def test_bar_excluded_from_cutoff_month(self):
++        report = club_monthly_report(self.conn, self.cfg, 7, "2026-05")
++        self.assertEqual(report["revenue"], 300.0)
++        self.assertEqual(report["revenue_own"], 300.0)
++
++    def test_bar_included_before_cutoff(self):
++        report = club_monthly_report(self.conn, self.cfg, 7, "2026-04")
++        self.assertEqual(report["revenue"], 100.0)
++        self.assertEqual(report["revenue_own"], 100.0)
++
++    def test_other_clubs_unaffected(self):
++        self.conn.execute(
++            "INSERT INTO sales (id, club_id, person_id, sale_date, kind, amount_kop, channel)"
++            " VALUES (99, 1, NULL, '2026-05-05', 'bar', 5000, 'own')"
++        )
++        report = club_monthly_report(self.conn, self.cfg, 1, "2026-05")
++        self.assertEqual(report["revenue"], 50.0)
++
++
+ class NetworkReportTest(unittest.TestCase):
+     def setUp(self):
+         self.conn, self.cfg, _ = demo_db()

@@ -1,0 +1,7 @@
+id,person_id,club_id,visit_date,visit_type
+1,1,1,2026-05-02,regular
+2,1,1,2026-05-09,regular
+3,2,1,2026-05-10,regular
+4,3,1,2026-05-03,trial
+5,4,2,2026-05-04,regular
+6,1,1,2026-04-30,regular

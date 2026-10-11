@@ -1,0 +1,265 @@
+{
+  "run_id": "T3-D-01",
+  "task": "T3",
+  "condition": "D",
+  "repeat": 1,
+  "model": "sonnet",
+  "claude_version": "2.1.280 (Claude Code)",
+  "started_at": "2026-10-10T11:39:33+00:00",
+  "steps": [
+    {
+      "returncode": 0,
+      "tool_uses": [
+        {
+          "tool": "Bash",
+          "target": "find . -path ./.git -prune -o -type f -print | sort"
+        },
+        {
+          "tool": "Read",
+          "target": "fitstat/db.py"
+        },
+        {
+          "tool": "Read",
+          "target": "fitstat/importer.py"
+        },
+        {
+          "tool": "Read",
+          "target": "fitstat/reports.py"
+        },
+        {
+          "tool": "Read",
+          "target": "docs/metrics.md"
+        },
+        {
+          "tool": "Bash",
+          "target": "echo \"--- raw/alpha/sessions.csv head ---\" && head -5 raw/alpha/sessions.csv && echo \"--- fixtures sessions.csv ---\" && cat tests/fixtures/raw/demo/sessions.csv"
+        },
+        {
+          "tool": "Read",
+          "target": "tests/test_reports.py"
+        },
+        {
+          "tool": "Read",
+          "target": "tests/helpers.py"
+        },
+        {
+          "tool": "Read",
+          "target": "fitstat/money.py"
+        },
+        {
+          "tool": "Read",
+          "target": "tests/fixtures/raw/demo/trainers.csv"
+        },
+        {
+          "tool": "Read",
+          "target": "tests/fixtures/raw/demo/sales.csv"
+        },
+        {
+          "tool": "Read",
+          "target": "tests/fixtures/raw/demo/clubs.csv"
+        },
+        {
+          "tool": "Read",
+          "target": "tests/fixtures/raw/demo/persons.csv"
+        },
+        {
+          "tool": "Read",
+          "target": "tests/test_importer.py"
+        },
+        {
+          "tool": "Read",
+          "target": "tests/fixtures/raw/demo/visits.csv"
+        },
+        {
+          "tool": "Read",
+          "target": "tests/fixtures/clients/demo.toml"
+        },
+        {
+          "tool": "Edit",
+          "target": "fitstat/db.py"
+        },
+        {
+          "tool": "Edit",
+          "target": "fitstat/importer.py"
+        },
+        {
+          "tool": "Edit",
+          "target": "fitstat/reports.py"
+        },
+        {
+          "tool": "Edit",
+          "target": "fitstat/reports.py"
+        },
+        {
+          "tool": "Read",
+          "target": "CLAUDE.md"
+        },
+        {
+          "tool": "Grep",
+          "target": "CLAUDE.md"
+        },
+        {
+          "tool": "Edit",
+          "target": "CLAUDE.md"
+        },
+        {
+          "tool": "Edit",
+          "target": "docs/metrics.md"
+        },
+        {
+          "tool": "Edit",
+          "target": "docs/metrics.md"
+        },
+        {
+          "tool": "Edit",
+          "target": "tests/fixtures/raw/demo/sessions.csv"
+        },
+        {
+          "tool": "Edit",
+          "target": "tests/fixtures/raw/demo/sessions.csv"
+        },
+        {
+          "tool": "Edit",
+          "target": "tests/fixtures/raw/demo/sales.csv"
+        },
+        {
+          "tool": "Edit",
+          "target": "tests/test_reports.py"
+        },
+        {
+          "tool": "Edit",
+          "target": "tests/test_reports.py"
+        },
+        {
+          "tool": "Edit",
+          "target": "tests/test_reports.py"
+        },
+        {
+          "tool": "Edit",
+          "target": "tests/test_importer.py"
+        },
+        {
+          "tool": "Bash",
+          "target": "python -m unittest discover -s tests -v 2>&1 | tail -50"
+        },
+        {
+          "tool": "Bash",
+          "target": "python3 -m unittest discover -s tests -v 2>&1 | tail -50"
+        },
+        {
+          "tool": "Bash",
+          "target": "python3 -m fitstat import alpha && python3 -m fitstat report alpha --trainer 1 --month 2026-01 && python3 -m fitstat report alpha --trainer 3 --month 2026-01"
+        },
+        {
+          "tool": "Bash",
+          "target": "git status --short"
+        },
+        {
+          "tool": "Bash",
+          "target": "cat .gitignore && git status --short --ignored | grep data || true"
+        }
+      ],
+      "result": {
+        "session_id": "462069bd-f8db-4b1e-9f63-d9a07b6c6b42",
+        "is_error": false,
+        "subtype": "success",
+        "num_turns": 38,
+        "duration_ms": 251872,
+        "total_cost_usd": 0.6408347999999997,
+        "result": "Good, `data/` is ignored as expected. Everything's in order.\n\n## Summary\n\nImplemented split credit for co-trained (\"вдвоём\") personal-training sessions in `trainer_monthly_report`:\n\n- **`fitstat/db.py`**: added nullable `assistant_trainer_id` column to `sessions`.\n- **`fitstat/importer.py`**: import the column (it was already present in the CSVs but ignored).\n- **`fitstat/reports.py`**: `trainer_monthly_report` now treats a session with `assistant_trainer_id` set as shared 50/50 between the main and second trainer, for both the session count and `pt_revenue`:\n  - Revenue is split in kopecks via the existing `money.split_evenly` helper (odd kopeck goes to whoever was `trainer_id` on that session) — exact, no rounding drift.\n  - Session counts: each co-trained session contributes 0.5 to each trainer; the per-trainer total is rounded up on a `.5` remainder via integer arithmetic `(shared + 1) // 2`, avoiding Python's banker's-rounding surprises. Solo sessions are untouched and still count fully.\n  - `club_monthly_report` and `network_monthly_report` are unchanged — a co-trained session is still just one session/one sale for club-level totals, only the trainer-level attribution changes, so public signatures and club-level math stay intact.\n- Updated `docs/metrics.md` and the stale note in `CLAUDE.md` (which said `assistant_trainer_id` wasn't imported).\n- Extended the `demo` fixtures with a co-trained session (trainer 1 main, trainer 2 assistant) backed by a new personal-training sale with an odd kopeck amount, specifically to exercise the rounding path, and updated/added tests in `tests/test_reports.py` and `tests/test_importer.py` accordingly.\n\nVerified against the real `alpha` data too (`python -m fitstat report alpha --trainer 3 --month 2026-01`), which already had `assistant_trainer_id` values — trainer 3 now correctly picks up its assistant share. All 12 unit tests pass.",
+        "usage": {
+          "input_tokens": 54,
+          "cache_creation_input_tokens": 39672,
+          "cache_read_input_tokens": 1299194,
+          "output_tokens": 22220,
+          "output_tokens_details": {
+            "thinking_tokens": 13046
+          },
+          "server_tool_use": {
+            "web_search_requests": 0,
+            "web_fetch_requests": 0
+          },
+          "service_tier": "standard",
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 39672,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "inference_geo": "global",
+          "iterations": [
+            {
+              "input_tokens": 2,
+              "output_tokens": 719,
+              "cache_read_input_tokens": 59335,
+              "cache_creation_input_tokens": 210,
+              "cache_creation": {
+                "ephemeral_5m_input_tokens": 0,
+                "ephemeral_1h_input_tokens": 210
+              },
+              "type": "message"
+            }
+          ],
+          "speed": "standard"
+        },
+        "modelUsage": {
+          "claude-sonnet-5": {
+            "inputTokens": 54,
+            "outputTokens": 22220,
+            "cacheReadInputTokens": 1299194,
+            "cacheCreationInputTokens": 39672,
+            "webSearchRequests": 0,
+            "costUSD": 0.6408347999999997,
+            "contextWindow": 1000000,
+            "maxOutputTokens": 64000,
+            "thinkingTokens": 13046,
+            "canonicalModel": "claude-sonnet-5",
+            "provider": "firstParty",
+            "costBasis": "list"
+          }
+        }
+      },
+      "init": {
+        "model": "claude-sonnet-5",
+        "claude_code_version": "2.1.280",
+        "tools": [
+          "Task",
+          "Bash",
+          "CronCreate",
+          "CronDelete",
+          "CronList",
+          "DesignSync",
+          "Edit",
+          "EnterWorktree",
+          "ExitWorktree",
+          "Glob",
+          "Grep",
+          "ListAgents",
+          "Monitor",
+          "NotebookEdit",
+          "PushNotification",
+          "Read",
+          "RemoteTrigger",
+          "ReportFindings",
+          "ScheduleWakeup",
+          "SendMessage",
+          "Skill",
+          "TaskStop",
+          "ToolSearch",
+          "WebFetch",
+          "WebSearch",
+          "Write",
+          "mcp__claude_ai_Claude_Docs__batch",
+          "mcp__claude_ai_Claude_Docs__create",
+          "mcp__claude_ai_Claude_Docs__delete",
+          "mcp__claude_ai_Claude_Docs__export",
+          "mcp__claude_ai_Claude_Docs__guide",
+          "mcp__claude_ai_Claude_Docs__query",
+          "mcp__claude_ai_Claude_Docs__read",
+          "mcp__claude_ai_Claude_Docs__update"
+        ],
+        "permissionMode": "acceptEdits"
+      }
+    }
+  ],
+  "finished_at": "2026-10-10T11:44:11+00:00",
+  "total_cost_usd": 0.6408
+}

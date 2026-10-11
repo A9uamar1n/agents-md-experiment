@@ -1,0 +1,213 @@
+diff --git a/docs/metrics.md b/docs/metrics.md
+index fa00a33..7a1e5a1 100755
+--- a/docs/metrics.md
++++ b/docs/metrics.md
+@@ -22,6 +22,23 @@
+ `pt_sessions` — количество проведённых персональных тренировок в клубе.
+ `pt_revenue` — сумма продаж вида `personal_training`.
+ 
++## Персональные тренировки тренера — `sessions`, `pt_revenue` (трен-отчёт)
++В отчёте по тренеру (`trainer_monthly_report`) тренировка, проведённая вдвоём
++(в выгрузке заполнен `assistant_trainer_id`), засчитывается обоим тренерам:
++- по количеству (`sessions`) — по очереди целыми тренировками, в порядке дат (и id —
++  при совпадении даты): для каждой пары тренеров за месяц одна тренировка идёт
++  тренеру с меньшим id, следующая — тренеру с большим id, и так далее. Разница
++  между тренерами в паре за месяц — не больше одной тренировки. Дробных тренировок нет.
++- по выручке (`pt_revenue`) — сумма продажи делится пополам в копейках; если копейка
++  нечётная, она достаётся основному тренеру (`trainer_id` в строке `sessions`).
++
++Если `assistant_trainer_id` совпадает с `trainer_id` (ошибка выгрузки), тренировка
++считается обычной, без второго тренера.
++
++Итоги клуба и сети (`pt_sessions`, `pt_revenue` в `club_monthly_report` и
++`network_monthly_report`) это не затрагивает: там считаются строки `sessions`
++один в один, без деления.
++
+ ## Пробный визит
+ Визит с типом `trial` или `guest_pass`. Гостевые визиты (участник привёл знакомого) считаются пробными с 2025 года.
+ 
+diff --git a/fitstat/db.py b/fitstat/db.py
+index 4e15917..9ac582b 100755
+--- a/fitstat/db.py
++++ b/fitstat/db.py
+@@ -40,7 +40,8 @@ CREATE TABLE sessions (
+     trainer_id INTEGER NOT NULL,
+     person_id INTEGER NOT NULL,
+     session_date TEXT NOT NULL,
+-    sale_id INTEGER NOT NULL
++    sale_id INTEGER NOT NULL,
++    assistant_trainer_id INTEGER            -- второй тренер на совместной тренировке, если был
+ );
+ """
+ 
+diff --git a/fitstat/importer.py b/fitstat/importer.py
+index 0eba7b3..fc4048c 100755
+--- a/fitstat/importer.py
++++ b/fitstat/importer.py
+@@ -60,9 +60,8 @@ def import_client(conn: sqlite3.Connection, cfg: ClientConfig, raw_dir: Path | N
+                 channel(r["channel"]),
+             ),
+         ),
+-        # Колонка assistant_trainer_id в выгрузке есть, но пока не используется
+         "sessions": (
+-            "INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?)",
++            "INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?)",
+             lambda r: (
+                 int(r["id"]),
+                 int(r["club_id"]),
+@@ -70,6 +69,7 @@ def import_client(conn: sqlite3.Connection, cfg: ClientConfig, raw_dir: Path | N
+                 int(r["person_id"]),
+                 r["session_date"],
+                 int(r["sale_id"]),
++                _nullable_int(r.get("assistant_trainer_id", "")),
+             ),
+         ),
+     }
+diff --git a/fitstat/reports.py b/fitstat/reports.py
+index 56b08ef..79069a5 100755
+--- a/fitstat/reports.py
++++ b/fitstat/reports.py
+@@ -7,7 +7,7 @@ from __future__ import annotations
+ import sqlite3
+ 
+ from fitstat.config import ClientConfig
+-from fitstat.money import to_rubles
++from fitstat.money import split_evenly, to_rubles
+ 
+ 
+ def _month_bounds(month: str) -> tuple[str, str]:
+@@ -72,26 +72,58 @@ def club_monthly_report(conn: sqlite3.Connection, cfg: ClientConfig, club_id: in
+ 
+ 
+ def trainer_monthly_report(conn: sqlite3.Connection, cfg: ClientConfig, trainer_id: int, month: str) -> dict:
++    """Совместные тренировки (assistant_trainer_id) делятся между основным и вторым тренером:
++    по количеству — по очереди, целыми тренировками, так что за месяц разница между
++    парой тренеров не больше одной тренировки; по выручке — пополам, нечётная копейка
++    основному тренеру (см. docs/metrics.md). Запись с assistant_trainer_id = trainer_id
++    (ошибка выгрузки) считаем обычной тренировкой без второго тренера.
++    """
+     start, end = _month_bounds(month)
+     period = (trainer_id, start, end)
+ 
+-    sessions = _scalar(
++    solo_sessions = _scalar(
+         conn,
+-        "SELECT COUNT(*) FROM sessions WHERE trainer_id = ? AND session_date >= ? AND session_date < ?",
++        "SELECT COUNT(*) FROM sessions WHERE trainer_id = ? AND session_date >= ? AND session_date < ?"
++        " AND (assistant_trainer_id IS NULL OR assistant_trainer_id = trainer_id)",
+         period,
+     )
+-    pt_revenue = _scalar(
++    solo_revenue = _scalar(
+         conn,
+         "SELECT SUM(s.amount_kop) FROM sessions ss JOIN sales s ON s.id = ss.sale_id"
+-        " WHERE ss.trainer_id = ? AND ss.session_date >= ? AND ss.session_date < ?",
++        " WHERE ss.trainer_id = ? AND ss.session_date >= ? AND ss.session_date < ?"
++        " AND (ss.assistant_trainer_id IS NULL OR ss.assistant_trainer_id = ss.trainer_id)",
+         period,
+     )
+ 
++    joint_rows = conn.execute(
++        "SELECT ss.trainer_id, ss.assistant_trainer_id, s.amount_kop"
++        " FROM sessions ss JOIN sales s ON s.id = ss.sale_id"
++        " WHERE (ss.trainer_id = ? OR ss.assistant_trainer_id = ?)"
++        " AND ss.assistant_trainer_id IS NOT NULL AND ss.assistant_trainer_id != ss.trainer_id"
++        " AND ss.session_date >= ? AND ss.session_date < ?"
++        " ORDER BY ss.session_date, ss.id",
++        (trainer_id, trainer_id, start, end),
++    ).fetchall()
++
++    joint_sessions = 0
++    joint_revenue = 0
++    turn_by_pair: dict[frozenset, int] = {}
++    for main_id, assistant_id, amount_kop in joint_rows:
++        pair = frozenset((main_id, assistant_id))
++        turn = turn_by_pair.get(pair, 0)
++        turn_by_pair[pair] = turn + 1
++        low, high = sorted(pair)
++        if (low if turn % 2 == 0 else high) == trainer_id:
++            joint_sessions += 1
++
++        main_share, assistant_share = split_evenly(amount_kop, 2)
++        joint_revenue += main_share if trainer_id == main_id else assistant_share
++
+     return {
+         "trainer_id": trainer_id,
+         "month": month,
+-        "sessions": sessions,
+-        "pt_revenue": to_rubles(pt_revenue),
++        "sessions": solo_sessions + joint_sessions,
++        "pt_revenue": to_rubles(solo_revenue + joint_revenue),
+     }
+ 
+ 
+diff --git a/tests/fixtures/raw/demo/sales.csv b/tests/fixtures/raw/demo/sales.csv
+index f6c846f..10f923e 100755
+--- a/tests/fixtures/raw/demo/sales.csv
++++ b/tests/fixtures/raw/demo/sales.csv
+@@ -6,3 +6,7 @@ id,club_id,person_id,sale_date,kind,amount,channel
+ 5,2,4,2026-05-08,personal_training,2500.00,partnerx
+ 6,1,3,2026-05-10,membership,3000.00,own
+ 7,1,,2026-04-15,bar,100.00,own
++8,1,1,2026-06-01,personal_training,1000.01,own
++9,1,2,2026-06-05,personal_training,1500.00,own
++10,1,3,2026-06-10,personal_training,2000.00,own
++11,1,1,2026-06-15,personal_training,3000.00,own
+diff --git a/tests/fixtures/raw/demo/sessions.csv b/tests/fixtures/raw/demo/sessions.csv
+index 2153007..225a2e5 100755
+--- a/tests/fixtures/raw/demo/sessions.csv
++++ b/tests/fixtures/raw/demo/sessions.csv
+@@ -1,3 +1,7 @@
+ id,club_id,trainer_id,person_id,session_date,sale_id,assistant_trainer_id
+ 1,1,1,1,2026-05-07,4,
+ 2,2,3,4,2026-05-08,5,
++10,1,1,1,2026-06-01,8,2
++11,1,2,2,2026-06-05,9,1
++12,1,1,3,2026-06-10,10,2
++13,1,1,1,2026-06-15,11,
+diff --git a/tests/test_importer.py b/tests/test_importer.py
+index aae97d2..99a01b9 100755
+--- a/tests/test_importer.py
++++ b/tests/test_importer.py
+@@ -11,7 +11,7 @@ class ImporterTest(unittest.TestCase):
+     def test_row_counts(self):
+         self.assertEqual(
+             self.counts,
+-            {"clubs": 2, "trainers": 3, "persons": 4, "visits": 6, "sales": 7, "sessions": 2},
++            {"clubs": 2, "trainers": 3, "persons": 4, "visits": 6, "sales": 11, "sessions": 6},
+         )
+ 
+     def test_partner_channel_is_normalized(self):
+diff --git a/tests/test_reports.py b/tests/test_reports.py
+index ad002b9..9df4c0c 100755
+--- a/tests/test_reports.py
++++ b/tests/test_reports.py
+@@ -37,6 +37,28 @@ class TrainerReportTest(unittest.TestCase):
+         self.assertEqual(report["sessions"], 0)
+         self.assertEqual(report["pt_revenue"], 0.0)
+ 
++    def test_joint_sessions_split_round_robin_and_half_revenue(self):
++        # Июнь: тренер 1 и тренер 2 проводят вдвоём три тренировки (сессии 10, 11, 12,
++        # роли основной/второй в выгрузке чередуются) плюс у тренера 1 одна обычная (13).
++        main = trainer_monthly_report(self.conn, self.cfg, 1, "2026-06")
++        second = trainer_monthly_report(self.conn, self.cfg, 2, "2026-06")
++
++        # Круговая очередь по паре (1, 2): сессии 10 и 12 - тренеру 1, сессия 11 - тренеру 2.
++        # Плюс обычная сессия 13 - тренеру 1.
++        self.assertEqual(main["sessions"], 3)
++        self.assertEqual(second["sessions"], 1)
++
++        # Выручка делится пополам, нечётная копейка - основному тренеру строки:
++        # 1000.01 -> 500.01/500.00, 1500.00 -> 750.00/750.00, 2000.00 -> 1000.00/1000.00,
++        # плюс обычная тренировка 3000.00 целиком тренеру 1.
++        self.assertEqual(main["pt_revenue"], 5250.01)
++        self.assertEqual(second["pt_revenue"], 2250.0)
++
++    def test_joint_sessions_do_not_change_club_totals(self):
++        report = club_monthly_report(self.conn, self.cfg, 1, "2026-06")
++        self.assertEqual(report["pt_sessions"], 4)
++        self.assertEqual(report["pt_revenue"], 7500.01)
++
+ 
+ class NetworkReportTest(unittest.TestCase):
+     def setUp(self):

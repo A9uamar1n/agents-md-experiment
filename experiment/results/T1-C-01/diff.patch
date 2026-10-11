@@ -1,0 +1,231 @@
+diff --git a/clients/alpha.toml b/clients/alpha.toml
+index 2bd84f9..5ee6887 100755
+--- a/clients/alpha.toml
++++ b/clients/alpha.toml
+@@ -7,3 +7,8 @@ partner_channels = ["sportpass", "fitmost"]
+ [clubs.3]
+ # Клуб закрыт, в итоги сети не включаем
+ closed_since = "2026-04-01"
++
++[clubs.7]
++# Бар клуба сдан в аренду стороннему оператору — его продажи больше не входят в выручку клуба
++exclude_sale_kinds = ["bar"]
++exclude_sale_kinds_since = "2026-05-01"
+diff --git a/docs/metrics.md b/docs/metrics.md
+index fa00a33..8eb13df 100755
+--- a/docs/metrics.md
++++ b/docs/metrics.md
+@@ -9,8 +9,13 @@
+ ## Выручка — `revenue`
+ Сумма всех продаж клуба за месяц: абонементы, персональные тренировки, бар. Все каналы продаж.
+ 
++Конфигурация конкретного клуба (`clients/<client>.toml`) может исключать отдельные виды продаж из `revenue`
++начиная с заданной даты — например, если точку продаж в клубе передали стороннему оператору. Это частность
++клуба, а не изменение общего определения метрики.
++
+ ## Собственная выручка — `revenue_own`
+-То же, что `revenue`, но только продажи через собственный канал клуба, без партнёров-агрегаторов.
++То же, что `revenue`, но только продажи через собственный канал клуба, без партнёров-агрегаторов. Исключения
++видов продаж по клубу (см. `revenue` выше) действуют и здесь.
+ 
+ ## Визиты — `visits`
+ Количество визитов любого типа.
+diff --git a/fitstat/reports.py b/fitstat/reports.py
+index 56b08ef..7df2d0a 100755
+--- a/fitstat/reports.py
++++ b/fitstat/reports.py
+@@ -21,20 +21,37 @@ def _scalar(conn: sqlite3.Connection, sql: str, params: tuple) -> int:
+     return conn.execute(sql, params).fetchone()[0] or 0
+ 
+ 
++def _excluded_sale_kinds(cfg: ClientConfig, club_id: int, start: str) -> list[str]:
++    """Виды продаж, которые по настройке клуба (`clients/<client>.toml`) не входят в revenue с указанной даты."""
++    club = cfg.club(club_id)
++    kinds = club.get("exclude_sale_kinds")
++    since = club.get("exclude_sale_kinds_since")
++    if kinds and since and start >= since:
++        return list(kinds)
++    return []
++
++
+ def club_monthly_report(conn: sqlite3.Connection, cfg: ClientConfig, club_id: int, month: str) -> dict:
+     start, end = _month_bounds(month)
+     period = (club_id, start, end)
+ 
++    excluded_kinds = _excluded_sale_kinds(cfg, club_id, start)
++    exclude_sql = ""
++    exclude_params: tuple = ()
++    if excluded_kinds:
++        exclude_sql = f" AND kind NOT IN ({','.join('?' * len(excluded_kinds))})"
++        exclude_params = tuple(excluded_kinds)
++
+     revenue = _scalar(
+         conn,
+-        "SELECT SUM(amount_kop) FROM sales WHERE club_id = ? AND sale_date >= ? AND sale_date < ?",
+-        period,
++        "SELECT SUM(amount_kop) FROM sales WHERE club_id = ? AND sale_date >= ? AND sale_date < ?" + exclude_sql,
++        period + exclude_params,
+     )
+     revenue_own = _scalar(
+         conn,
+         "SELECT SUM(amount_kop) FROM sales"
+-        " WHERE club_id = ? AND sale_date >= ? AND sale_date < ? AND channel = 'own'",
+-        period,
++        " WHERE club_id = ? AND sale_date >= ? AND sale_date < ? AND channel = 'own'" + exclude_sql,
++        period + exclude_params,
+     )
+     visits = _scalar(
+         conn,
+diff --git a/tests/fixtures/clients/demo_bar.toml b/tests/fixtures/clients/demo_bar.toml
+new file mode 100644
+index 0000000..d1d43e0
+--- /dev/null
++++ b/tests/fixtures/clients/demo_bar.toml
+@@ -0,0 +1,9 @@
++name = "ДемоБар"
++
++[import]
++partner_channels = ["partnerx"]
++
++[clubs.1]
++# Клуб, где с заданной даты бар исключён из выручки — для проверки общего механизма
++exclude_sale_kinds = ["bar"]
++exclude_sale_kinds_since = "2026-05-01"
+diff --git a/tests/fixtures/raw/demo_bar/clubs.csv b/tests/fixtures/raw/demo_bar/clubs.csv
+new file mode 100644
+index 0000000..5735fb5
+--- /dev/null
++++ b/tests/fixtures/raw/demo_bar/clubs.csv
+@@ -0,0 +1,2 @@
++id,name,opened_at
++1,Бар Клуб,2020-01-01
+diff --git a/tests/fixtures/raw/demo_bar/persons.csv b/tests/fixtures/raw/demo_bar/persons.csv
+new file mode 100644
+index 0000000..c0c9997
+--- /dev/null
++++ b/tests/fixtures/raw/demo_bar/persons.csv
+@@ -0,0 +1 @@
++id,club_id,created_at
+diff --git a/tests/fixtures/raw/demo_bar/sales.csv b/tests/fixtures/raw/demo_bar/sales.csv
+new file mode 100644
+index 0000000..a42b236
+--- /dev/null
++++ b/tests/fixtures/raw/demo_bar/sales.csv
+@@ -0,0 +1,5 @@
++id,club_id,person_id,sale_date,kind,amount,channel
++1,1,,2026-04-20,bar,100.00,own
++2,1,,2026-05-10,bar,200.00,own
++3,1,,2026-05-11,membership,50.00,own
++4,1,,2026-05-12,membership,30.00,partnerx
+diff --git a/tests/fixtures/raw/demo_bar/sessions.csv b/tests/fixtures/raw/demo_bar/sessions.csv
+new file mode 100644
+index 0000000..7527b83
+--- /dev/null
++++ b/tests/fixtures/raw/demo_bar/sessions.csv
+@@ -0,0 +1 @@
++id,club_id,trainer_id,person_id,session_date,sale_id,assistant_trainer_id
+diff --git a/tests/fixtures/raw/demo_bar/trainers.csv b/tests/fixtures/raw/demo_bar/trainers.csv
+new file mode 100644
+index 0000000..c9bcf3e
+--- /dev/null
++++ b/tests/fixtures/raw/demo_bar/trainers.csv
+@@ -0,0 +1 @@
++id,club_id,name
+diff --git a/tests/fixtures/raw/demo_bar/visits.csv b/tests/fixtures/raw/demo_bar/visits.csv
+new file mode 100644
+index 0000000..cfec955
+--- /dev/null
++++ b/tests/fixtures/raw/demo_bar/visits.csv
+@@ -0,0 +1 @@
++id,person_id,club_id,visit_date,visit_type
+diff --git a/tests/helpers.py b/tests/helpers.py
+index 45707a9..0ca1e40 100755
+--- a/tests/helpers.py
++++ b/tests/helpers.py
+@@ -13,3 +13,11 @@ def demo_db():
+     conn = connect()
+     counts = import_client(conn, cfg, FIXTURES / "raw" / "demo")
+     return conn, cfg, counts
++
++
++def demo_bar_db():
++    """База и конфиг тестового клиента «ДемоБар» — клуб с exclude_sale_kinds (tests/fixtures)."""
++    cfg = load_config("demo_bar", clients_dir=FIXTURES / "clients")
++    conn = connect()
++    counts = import_client(conn, cfg, FIXTURES / "raw" / "demo_bar")
++    return conn, cfg, counts
+diff --git a/tests/test_reports.py b/tests/test_reports.py
+index ad002b9..367a971 100755
+--- a/tests/test_reports.py
++++ b/tests/test_reports.py
+@@ -1,7 +1,12 @@
++import csv
+ import unittest
+ 
++from fitstat.config import load_config
++from fitstat.db import connect
++from fitstat.importer import RAW_DIR, import_client
++from fitstat.money import to_kopecks, to_rubles
+ from fitstat.reports import club_monthly_report, network_monthly_report, trainer_monthly_report
+-from tests.helpers import demo_db
++from tests.helpers import demo_bar_db, demo_db
+ 
+ 
+ class ClubReportTest(unittest.TestCase):
+@@ -54,5 +59,56 @@ class NetworkReportTest(unittest.TestCase):
+         self.assertEqual(report["revenue"], 100.0)
+ 
+ 
++class ExcludeSaleKindsTest(unittest.TestCase):
++    """Общий механизм exclude_sale_kinds / exclude_sale_kinds_since из конфига клуба."""
++
++    def setUp(self):
++        self.conn, self.cfg, _ = demo_bar_db()
++
++    def test_before_cutoff_kind_still_included(self):
++        report = club_monthly_report(self.conn, self.cfg, 1, "2026-04")
++        self.assertEqual(report["revenue"], 100.0)
++        self.assertEqual(report["revenue_own"], 100.0)
++
++    def test_from_cutoff_kind_excluded_from_revenue_and_revenue_own(self):
++        report = club_monthly_report(self.conn, self.cfg, 1, "2026-05")
++        self.assertEqual(report["revenue"], 80.0)
++        self.assertEqual(report["revenue_own"], 50.0)
++
++
++class AlphaClub7BarExclusionTest(unittest.TestCase):
++    """Критерий приёмки: revenue клуба №7 «Альфы» не включает продажи бара с мая 2026."""
++
++    def setUp(self):
++        self.cfg = load_config("alpha")
++        self.conn = connect()
++        import_client(self.conn, self.cfg)
++        self.raw_dir = RAW_DIR / "alpha"
++
++    def _sum_club_sales(self, club_id: int, month: str, exclude_kinds: set[str]) -> float:
++        totals_kop = 0
++        with open(self.raw_dir / "sales.csv", encoding="utf-8", newline="") as f:
++            for row in csv.DictReader(f):
++                if int(row["club_id"]) != club_id or not row["sale_date"].startswith(month):
++                    continue
++                if row["kind"] in exclude_kinds:
++                    continue
++                totals_kop += to_kopecks(row["amount"])
++        return to_rubles(totals_kop)
++
++    def test_may_revenue_excludes_bar(self):
++        expected_with_bar = self._sum_club_sales(7, "2026-05", exclude_kinds=set())
++        expected_without_bar = self._sum_club_sales(7, "2026-05", exclude_kinds={"bar"})
++        self.assertNotEqual(expected_with_bar, expected_without_bar, "в майских данных должны быть продажи бара")
++
++        report = club_monthly_report(self.conn, self.cfg, 7, "2026-05")
++        self.assertEqual(report["revenue"], expected_without_bar)
++
++    def test_april_revenue_still_includes_bar(self):
++        expected_with_bar = self._sum_club_sales(7, "2026-04", exclude_kinds=set())
++        report = club_monthly_report(self.conn, self.cfg, 7, "2026-04")
++        self.assertEqual(report["revenue"], expected_with_bar)
++
++
+ if __name__ == "__main__":
+     unittest.main()

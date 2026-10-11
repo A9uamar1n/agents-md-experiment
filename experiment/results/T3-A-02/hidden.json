@@ -1,0 +1,14 @@
+{
+  "task": "T3",
+  "checks": {
+    "club_totals_unchanged": true,
+    "network_unchanged": true,
+    "no_row_duplication": true,
+    "assistant_credited": true,
+    "project_tests_pass": true
+  },
+  "info": {
+    "reading": "both"
+  },
+  "errors": []
+}

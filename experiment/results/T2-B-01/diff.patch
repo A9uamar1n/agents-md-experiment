@@ -1,0 +1,62 @@
+diff --git a/fitstat/reports.py b/fitstat/reports.py
+index 56b08ef..4bfd1bc 100755
+--- a/fitstat/reports.py
++++ b/fitstat/reports.py
+@@ -21,6 +21,41 @@ def _scalar(conn: sqlite3.Connection, sql: str, params: tuple) -> int:
+     return conn.execute(sql, params).fetchone()[0] or 0
+ 
+ 
++def _trial_conversion(conn: sqlite3.Connection, club_id: int, start: str, end: str) -> float | None:
++    """Доля когорты месяца (первый пробный визит в клубе), купившей абонемент
++    в день визита или в следующие 14 календарных дней. См. docs/metrics.md."""
++    cohort_size, converted = conn.execute(
++        """
++        WITH first_trial AS (
++            SELECT person_id, MIN(visit_date) AS first_date
++            FROM visits
++            WHERE club_id = ? AND visit_type IN ('trial', 'guest_pass')
++            GROUP BY person_id
++        ),
++        cohort AS (
++            SELECT person_id, first_date FROM first_trial
++            WHERE first_date >= ? AND first_date < ?
++        )
++        SELECT
++            COUNT(*),
++            SUM(CASE WHEN EXISTS (
++                SELECT 1 FROM sales s
++                WHERE s.club_id = ?
++                  AND s.person_id = cohort.person_id
++                  AND s.kind = 'membership'
++                  AND s.sale_date >= cohort.first_date
++                  AND s.sale_date <= date(cohort.first_date, '+14 days')
++            ) THEN 1 ELSE 0 END)
++        FROM cohort
++        """,
++        (club_id, start, end, club_id),
++    ).fetchone()
++
++    if not cohort_size:
++        return None
++    return round((converted or 0) / cohort_size, 3)
++
++
+ def club_monthly_report(conn: sqlite3.Connection, cfg: ClientConfig, club_id: int, month: str) -> dict:
+     start, end = _month_bounds(month)
+     period = (club_id, start, end)
+@@ -58,6 +93,7 @@ def club_monthly_report(conn: sqlite3.Connection, cfg: ClientConfig, club_id: in
+         " WHERE club_id = ? AND sale_date >= ? AND sale_date < ? AND kind = 'personal_training'",
+         period,
+     )
++    trial_conversion = _trial_conversion(conn, club_id, start, end)
+ 
+     return {
+         "club_id": club_id,
+@@ -68,6 +104,7 @@ def club_monthly_report(conn: sqlite3.Connection, cfg: ClientConfig, club_id: in
+         "active_members": active_members,
+         "pt_sessions": pt_sessions,
+         "pt_revenue": to_rubles(pt_revenue),
++        "trial_conversion": trial_conversion,
+     }
+ 
+ 
